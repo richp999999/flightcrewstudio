@@ -1,0 +1,12 @@
+@* Import section: sub-menu (Logbook.Aero, …) beside the page. Pages keep their own page header. *@
+
+<SubMenuLayout Label="Import">
+    <Menu>
+        <NavLink class="admin-menu-link" href="import/logbook-aero">Logbook.Aero</NavLink>
+    </Menu>
+    <ChildContent>@ChildContent</ChildContent>
+</SubMenuLayout>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

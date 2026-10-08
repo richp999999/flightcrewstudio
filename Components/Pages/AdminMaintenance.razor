@@ -15,8 +15,9 @@
             <h5 class="card-title">Recalculate day / night time</h5>
             <p class="text-muted small mb-3">
                 Works out the day and night time of every stored flight (all users) from its off-block and
-                on-block times along the great-circle route between its airports — the same calculation used
-                when flights are synced or edited. Run this after importing airport data, or to refresh older flights.
+                on-block times along the great-circle route between its airports, and ticks “night landing”
+                when it was night at the destination at landing — the same calculation used when flights
+                are synced or edited. Run this after importing airport data, or to refresh older flights.
                 Flights whose airports have no position yet are left as they are.
             </p>
             <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">@(_busy ? "Recalculating…" : "Recalculate all flights")</button>

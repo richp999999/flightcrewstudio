@@ -34,14 +34,17 @@ public sealed class CrewRoleLookup
         _ => code.Trim()
     };
 
-    /// <summary>Find a role by name, creating it if new. Null/blank names give null.</summary>
-    public CrewRole? Resolve(string? name)
+    /// <summary>
+    /// Find a role by name, creating it if new. Null/blank names give null. <paramref name="flightDeck"/>
+    /// marks a newly created role as a pilot position (existing roles are left as they are).
+    /// </summary>
+    public CrewRole? Resolve(string? name, bool flightDeck = false)
     {
         if (string.IsNullOrWhiteSpace(name)) return null;
         name = name.Trim();
         if (_byName.TryGetValue(name, out var role)) return role;
 
-        role = new CrewRole { Name = name.Length > 50 ? name[..50] : name, SortOrder = 100 };
+        role = new CrewRole { Name = name.Length > 50 ? name[..50] : name, SortOrder = 100, IsFlightDeck = flightDeck };
         _db.CrewRoles.Add(role);
         _byName[name] = role;
         return role;

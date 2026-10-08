@@ -57,6 +57,30 @@ public class Flight
 
     public List<FlightCrew> Crew { get; set; } = new();
 
+    /// <summary>
+    /// Where the flight came from when it wasn't synced from GlobaLog, e.g. "logbook.aero" for a
+    /// CSV import. Null for GlobaLog flights. Imported flights have a negative <see cref="GlobaLogFlightId"/>.
+    /// </summary>
+    [MaxLength(20)]
+    public string? Source { get; set; }
+
+    // ---- Logged values ----------------------------------------------------------------
+    // Normally the logbook columns are worked out: function time from MyCrewRole, multi-pilot =
+    // block time, one take-off/landing when pilot flying. Flights imported from another logbook
+    // keep that logbook's own figures here instead (null = work it out as usual).
+
+    public int? LoggedSingleEngineMinutes { get; set; }
+    public int? LoggedMultiEngineMinutes { get; set; }
+    public int? LoggedMultiPilotMinutes { get; set; }
+    public int? LoggedPicMinutes { get; set; }
+    public int? LoggedCoPilotMinutes { get; set; }
+    public int? LoggedDualMinutes { get; set; }
+    public int? LoggedInstructorMinutes { get; set; }
+    public int? TakeoffsDay { get; set; }
+    public int? TakeoffsNight { get; set; }
+    public int? LandingsDay { get; set; }
+    public int? LandingsNight { get; set; }
+
     /// <summary>Free-text remarks (entered in this app).</summary>
     [MaxLength(1000)]
     public string? Remarks { get; set; }

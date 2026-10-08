@@ -13,9 +13,13 @@ public sealed class TokenGlobaLogClient : IGlobaLogClient
     private readonly HttpClient _http;
     internal static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public TokenGlobaLogClient(string baseUrl, string apiToken, int timeoutSeconds)
+    public TokenGlobaLogClient(string baseUrl, string apiToken, int timeoutSeconds, ILogger? logger = null)
     {
-        _http = new HttpClient { BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+        // Retries requests that fail to connect (e.g. a dropped TLS handshake) before giving up.
+        _http = new HttpClient(new TransientRetryHandler(new HttpClientHandler(), logger))
+        {
+            BaseAddress = new Uri(baseUrl), Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+        };
         _http.DefaultRequestHeaders.Add("X-Token", apiToken);
         _http.DefaultRequestHeaders.Accept.ParseAdd("application/json");
     }

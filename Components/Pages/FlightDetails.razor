@@ -87,7 +87,7 @@ else
                 <div class="row g-2">
                     <div class="col-sm-6"><label class="form-label small">Off block</label><input type="datetime-local" class="form-control" @bind="_m.OffBlock" @bind:after="RecalcDayNight" /></div>
                     <div class="col-sm-6"><label class="form-label small">Take-off</label><input type="datetime-local" class="form-control" @bind="_m.DepartureTime" /></div>
-                    <div class="col-sm-6"><label class="form-label small">Landing</label><input type="datetime-local" class="form-control" @bind="_m.ArrivalTime" /></div>
+                    <div class="col-sm-6"><label class="form-label small">Landing</label><input type="datetime-local" class="form-control" @bind="_m.ArrivalTime" @bind:after="RecalcDayNight" /></div>
                     <div class="col-sm-6"><label class="form-label small">On block</label><input type="datetime-local" class="form-control" @bind="_m.OnBlock" @bind:after="RecalcDayNight" /></div>
                 </div>
             </div></div>
@@ -224,7 +224,7 @@ else
         <!-- ---------------- Source ---------------- -->
         <div class="col-12">
             <p class="small-muted mb-0">
-                GlobaLog flight id @_m.GlobaLogFlightId ·
+                @if (_m.Source is not null) { <text>Imported from @_m.Source ·</text> } else { <text>GlobaLog flight id @_m.GlobaLogFlightId ·</text> }
                 first downloaded @_m.FetchedAt.ToString("dd/MM/yyyy HH:mm") UTC ·
                 last updated @_m.LastUpdatedAt.ToString("dd/MM/yyyy HH:mm") UTC
             </p>
@@ -265,9 +265,9 @@ else
     private void RecalcDayNight()
     {
         if (_m is null) return;
-        var r = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason);
+        var r = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason, _m.ArrivalTime);
         _dayNightCalculated = r is not null;
-        if (r is { } v) { _m.TotalDayMinutes = v.DayMinutes; _m.TotalNightMinutes = v.NightMinutes; }
+        if (r is { } v) { _m.TotalDayMinutes = v.DayMinutes; _m.TotalNightMinutes = v.NightMinutes; _m.NightLanding = v.NightLanding; }
     }
 
     private string IcaoOf(int? id) => id is null ? "???" : (id == _m?.DepartureAirportId ? _depIcao : _arrIcao) ?? "???";
@@ -356,9 +356,9 @@ else
         _arrAirport = _m.ArrivalAirportId is { } r ? await db.Airports.AsNoTracking().FirstOrDefaultAsync(a => a.Id == r) : null;
         _depIcao = _depAirport?.Icao; _arrIcao = _arrAirport?.Icao;
         // Show what the calculation gives for the stored times/route (stored values otherwise).
-        var dn = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason);
+        var dn = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason, _m.ArrivalTime);
         _dayNightCalculated = dn is not null;
-        if (dn is { } v0) { _m.TotalDayMinutes = v0.DayMinutes; _m.TotalNightMinutes = v0.NightMinutes; }
+        if (dn is { } v0) { _m.TotalDayMinutes = v0.DayMinutes; _m.TotalNightMinutes = v0.NightMinutes; _m.NightLanding = v0.NightLanding; }
         _aircraft = (await db.Aircraft.AsNoTracking().Include(a => a.AircraftType).Where(a => a.UserId == _userId).ToListAsync())
             .OrderBy(a => a.AircraftType?.Name).ThenBy(a => a.Registration).ToList();
         _roles = await db.CrewRoles.AsNoTracking().OrderBy(r => r.SortOrder).ThenBy(r => r.Name).ToListAsync();
@@ -366,7 +366,9 @@ else
             .OrderBy(c => c.Name is null).ThenBy(c => c.DisplayName).ToList();
         _members = _memberOptions.ToDictionary(c => c.Id);
 
-        _globaLogUrl = $"{GlobaLogOpts.Value.BaseUrl.TrimEnd('/')}/flights/{_m.GlobaLogFlightId}";
+        // Imported flights (e.g. from logbook.aero) have no GlobaLog page.
+        _globaLogUrl = _m.Source is null && _m.GlobaLogFlightId > 0
+            ? $"{GlobaLogOpts.Value.BaseUrl.TrimEnd('/')}/flights/{_m.GlobaLogFlightId}" : null;
     }
 
     private void AddCrewRow() => _crew.Add(new CrewRow { CrewRoleId = CrewRole.CabinCrewId });
@@ -409,7 +411,10 @@ else
             }
             f.TotalInstrMinutes = _m.TotalInstrMinutes;
             f.RadiationAmount = _m.RadiationAmount;
-            f.NightLanding = _m.NightLanding;
+            // Imported take-off/landing counts no longer apply once PF or night landing is changed here.
+            if (f.NightLanding != _m.NightLanding || f.PilotFlying != _m.PilotFlying)
+                f.TakeoffsDay = f.TakeoffsNight = f.LandingsDay = f.LandingsNight = null;
+            f.NightLanding = _m.NightLanding;   // pre-ticked by the calculation above, but can be overridden
             f.PilotFlying = _m.PilotFlying;
             f.Remarks = T(_m.Remarks);
 
@@ -436,7 +441,10 @@ else
 
             // My role follows my crew-list entry when I'm on the crew; otherwise the dropdown.
             var myRoleId = _myCrewMemberId is null ? null : f.Crew.FirstOrDefault(c => c.CrewMemberId == _myCrewMemberId)?.CrewRoleId;
-            f.MyCrewRoleId = myRoleId ?? (_m.MyCrewRoleId is { } m && roleIds.Contains(m) ? m : null);
+            var newRoleId = myRoleId ?? (_m.MyCrewRoleId is { } m && roleIds.Contains(m) ? m : null);
+            // Imported PIC/co-pilot time no longer applies once my role is changed here; it's then worked out from the role.
+            if (newRoleId != f.MyCrewRoleId) f.LoggedPicMinutes = f.LoggedCoPilotMinutes = null;
+            f.MyCrewRoleId = newRoleId;
 
             f.EditedLocally = true;
             f.EditedAt = DateTime.UtcNow;

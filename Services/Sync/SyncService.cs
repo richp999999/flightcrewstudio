@@ -93,11 +93,14 @@ public sealed class SyncService(
             var airports = await AirportLookup.LoadAsync(db, ct);
             var crewErrors = 0;
             var skippedEdited = 0;
+            var matchedImported = 0;
             // Flights the user has edited here are left alone (by GlobaLog id).
             var editedIds = (await db.Flights.Where(x => x.UserId == userId && x.EditedLocally)
                 .Select(x => x.GlobaLogFlightId).ToListAsync(ct)).ToHashSet();
             // Flights arrive newest first, so the first role seen for a person in this run is their latest.
             var roleSetThisRun = new HashSet<CrewMember>();
+            // Imported flights taken over by a GlobaLog flight this run (each only once).
+            var claimedThisRun = new HashSet<Flight>();
 
             using var client = factory.Create(credential);
             var hello = await client.TestConnectionAsync(ct);
@@ -164,9 +167,15 @@ public sealed class SyncService(
                         logger.LogWarning(ex, "Could not fetch crew for GlobaLog flight {FlightId}", f.Id);
                     }
 
-                    var created = await UpsertAsync(db, userId, f, details, crewIndex, roles, aircraft, airports, roleSetThisRun, me, ct);
+                    var outcome = await UpsertAsync(db, userId, f, details, crewIndex, roles, aircraft, airports, roleSetThisRun, me, claimedThisRun, ct);
                     progress.FlightsSeen++;
-                    if (created) progress.NewFlights++; else progress.UpdatedFlights++;
+                    switch (outcome)
+                    {
+                        case UpsertOutcome.Created: progress.NewFlights++; break;
+                        case UpsertOutcome.Updated: progress.UpdatedFlights++; break;
+                        case UpsertOutcome.MatchedImported: progress.UpdatedFlights++; matchedImported++; break;
+                        case UpsertOutcome.SkippedEdited: skippedEdited++; break;
+                    }
 
                     if (f.OffBlock.HasValue && (!newHighWater.HasValue || f.OffBlock.Value > newHighWater.Value))
                         newHighWater = f.OffBlock.Value;
@@ -188,6 +197,7 @@ public sealed class SyncService(
             }
 
             var summary = $"{progress.NewFlights} new, {progress.UpdatedFlights} updated" +
+                          (matchedImported > 0 ? $", {matchedImported} matched to imported flights" : "") +
                           (skippedEdited > 0 ? $", {skippedEdited} edited here left unchanged" : "") +
                           (crewErrors > 0 ? $"; crew could not be loaded for {crewErrors} flight(s) — see log" : "") + ".";
             // Remember the crew member we recognised as "me" so Settings shows it.
@@ -227,13 +237,20 @@ public sealed class SyncService(
         }
     }
 
+    private enum UpsertOutcome { Created, Updated, MatchedImported, SkippedEdited }
+
     /// <summary>
     /// Insert or update a flight by (userId, GlobaLog id) and, when <paramref name="details"/> are
-    /// given, replace its crew links and fill in fuller airport details. Returns true if the flight was newly created.
+    /// given, replace its crew links and fill in fuller airport details.
+    ///
+    /// A GlobaLog flight not yet stored is matched to an imported flight (e.g. from logbook.aero) by
+    /// the same rule the import uses — <see cref="FlightMatching"/>: same departure airport,
+    /// off-block within 15 minutes. That flight is then taken over rather than a copy being added.
     /// </summary>
-    private static async Task<bool> UpsertAsync(
+    private static async Task<UpsertOutcome> UpsertAsync(
         ApplicationDbContext db, string userId, GlobaLogFlight f, GlobaLogFlightDetails? details,
-        Dictionary<string, CrewMember> crewIndex, CrewRoleLookup roles, AircraftLookup aircraft, AirportLookup airports, HashSet<CrewMember> roleSetThisRun, MyCrewContext me, CancellationToken ct)
+        Dictionary<string, CrewMember> crewIndex, CrewRoleLookup roles, AircraftLookup aircraft, AirportLookup airports,
+        HashSet<CrewMember> roleSetThisRun, MyCrewContext me, HashSet<Flight> claimedThisRun, CancellationToken ct)
     {
         var existing = await db.Flights
             .Include(x => x.Crew)
@@ -249,21 +266,45 @@ public sealed class SyncService(
             if (existing is not null) existing.GlobaLogFlightId = f.Id;
         }
 
+        // An imported flight (logbook.aero etc.) that is this GlobaLog flight: take it over.
+        var matchedImported = false;
+        if (existing is null && f.OffBlock is { } off)
+        {
+            existing = await FlightMatching.FindAsync(db.Flights.Include(x => x.Crew), userId, f.Departure?.Airport?.Icao, off,
+                x => x.Source is not null && !claimedThisRun.Contains(x), ct);
+            if (existing is not null)
+            {
+                claimedThisRun.Add(existing);
+                existing.GlobaLogFlightId = f.Id;   // from now on it's found by its GlobaLog id
+                existing.Source = null;
+                matchedImported = true;
+                if (existing.EditedLocally) return UpsertOutcome.SkippedEdited;   // edits made here win, as usual
+            }
+        }
+
         var isNew = existing is null;
         var flight = existing ?? new Flight { UserId = userId, GlobaLogFlightId = f.Id, FetchedAt = DateTime.UtcNow };
 
-        flight.Name = f.Name;
+        // Flights that came from another logbook keep that logbook's figures (block times, day/night,
+        // IFR, landings, PF, function times), so totals still match it. GlobaLog fills in the rest:
+        // flight number, take-off/landing times, radiation, aircraft and crew.
+        var keepLogbook = flight.LoggedPicMinutes is not null;
+
+        flight.Name = f.Name ?? flight.Name;
         flight.Status = f.Status;
-        flight.OffBlock = f.OffBlock;
         flight.DepartureTime = f.DepartureTime;
         flight.ArrivalTime = f.ArrivalTime;
-        flight.OnBlock = f.OnBlock;
         flight.RadiationAmount = f.RadiationAmount;
-        flight.TotalDayMinutes = f.TotalDayMinutes;
-        flight.TotalNightMinutes = f.TotalNightMinutes;
-        flight.TotalInstrMinutes = f.TotalInstrMinutes;
-        flight.NightLanding = f.NightLanding;
         flight.ForeignId = f.ForeignId;
+        if (!keepLogbook)
+        {
+            flight.OffBlock = f.OffBlock;
+            flight.OnBlock = f.OnBlock;
+            flight.TotalDayMinutes = f.TotalDayMinutes;
+            flight.TotalNightMinutes = f.TotalNightMinutes;
+            flight.TotalInstrMinutes = f.TotalInstrMinutes;
+            flight.NightLanding = f.NightLanding;
+        }
 
         // Airports: the list/CSV gives ICAO codes; the flight page adds IATA, name and country.
         static GlobaLogAirport? Merge(GlobaLogAirport? a, GlobaLogAirport? b) => a is null && b is null ? null : new GlobaLogAirport
@@ -279,12 +320,14 @@ public sealed class SyncService(
 
         // Day/night time: calculated here from the times and the great-circle route (when both
         // airports have positions), rather than taken from GlobaLog's export.
-        FlightDayNight.Apply(flight, flight.DepartureAirport, flight.ArrivalAirport);
+        if (!keepLogbook)
+            FlightDayNight.Apply(flight, flight.DepartureAirport, flight.ArrivalAirport);
 
         // Role from the logbook export ("CPT", "PSV", …); replaced below by my crew-list role when known.
         if (roles.Resolve(CrewRoleLookup.FromLogbookCode(f.MyRole)) is { } exportRole)
             flight.MyCrewRole = exportRole;
-        flight.PilotFlying = f.PilotFlying ?? flight.PilotFlying;
+        if (!keepLogbook)
+            flight.PilotFlying = f.PilotFlying ?? flight.PilotFlying;
 
         if (aircraft.Resolve(f.Aircraft?.Registration, f.Aircraft?.Icao, f.Aircraft?.Manufacturer) is { } ac)
             flight.Aircraft = ac;
@@ -317,7 +360,7 @@ public sealed class SyncService(
         }
 
         if (isNew) db.Flights.Add(flight);
-        return isNew;
+        return isNew ? UpsertOutcome.Created : matchedImported ? UpsertOutcome.MatchedImported : UpsertOutcome.Updated;
     }
 
     /// <summary>Match a crew entry to an existing person (by staff number or name), or create one.</summary>

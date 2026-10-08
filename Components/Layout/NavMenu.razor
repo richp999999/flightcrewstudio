@@ -23,6 +23,7 @@
                         <summary class="nav-link @(InUserMenuArea ? "active" : "")">@context.User.Identity?.Name</summary>
                         <div class="user-menu-list" onclick="this.closest('details').open = false">
                             <a href="settings">Settings</a>
+                            <a href="import">Import</a>
                             <AuthorizeView Policy="Admin" Context="adminContext">
                                 <a href="admin">Admin</a>
                             </AuthorizeView>
@@ -52,6 +53,7 @@
     private bool InUserMenuArea =>
         currentUrl is { } u && (u.StartsWith("settings", StringComparison.OrdinalIgnoreCase)
                                 || u.StartsWith("admin", StringComparison.OrdinalIgnoreCase)
+                                || u.StartsWith("import", StringComparison.OrdinalIgnoreCase)
                                 || u.StartsWith("Account/Manage", StringComparison.OrdinalIgnoreCase));
 
     protected override void OnInitialized()

@@ -1,0 +1,164 @@
+@page "/import/logbook-aero"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Import
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ILogger<ImportLogbookAero> Logger
+
+<PageTitle>Import from Logbook.Aero · FlightCrewStudio</PageTitle>
+
+<ImportShell>
+<div class="page-head"><h1>Logbook.Aero</h1></div>
+
+<p class="text-muted">
+    Import flights from a logbook.aero CSV export (Export → CSV on logbook.aero), or from a CSV exported
+    by FlightCrewStudio. Flights already stored here — same departure airport and off-block time within
+    @((int)LogbookAeroImporter.MatchWindow.TotalMinutes) minutes — are skipped, so GlobaLog flights are
+    left as they are and importing the same file again adds nothing.
+</p>
+
+<div class="card mb-3"><div class="card-body">
+    <h5 class="card-title">1. Choose the file</h5>
+    <InputFile class="form-control" accept=".csv,text/csv" OnChange="OnFileChosen" disabled="@_busy" />
+    @if (_reading) { <div class="small text-muted mt-2">Reading…</div> }
+    @if (_error is not null) { <div class="alert alert-danger py-2 mt-3 mb-0">@_error</div> }
+</div></div>
+
+@if (_preview is not null && _result is null)
+{
+    var newFlights = _preview.New.ToList();
+    <div class="card mb-3"><div class="card-body">
+        <h5 class="card-title">2. Check and import</h5>
+        <p class="mb-2"><strong>@_fileName</strong> — @_preview.Flights.Count.ToString("N0") flights@(_preview.Flights.Count > 0 ? $", {_preview.Flights.Min(f => f.OffBlock):dd/MM/yyyy} to {_preview.Flights.Max(f => f.OffBlock):dd/MM/yyyy}" : "").</p>
+
+        <div class="stat-strip justify-content-start mb-3">
+            <div class="stat primary"><div class="value">@newFlights.Count.ToString("N0")</div><div class="label">To import</div></div>
+            <div class="stat"><div class="value">@Fmt.HmZero(newFlights.Sum(f => (long)f.TotalMinutes))</div><div class="label">Flight time</div></div>
+            <div class="stat"><div class="value">@_preview.AlreadyStored.ToString("N0")</div><div class="label">Already stored</div></div>
+            <div class="stat"><div class="value">@_preview.Problems.Count.ToString("N0")</div><div class="label">Not readable</div></div>
+        </div>
+
+        @if (_preview.PersonColumns > 0)
+        {
+            <p class="small text-muted mb-2">Crew read from @_preview.PersonColumns Person/Role column pair@(_preview.PersonColumns == 1 ? "" : "s").</p>
+        }
+        @if (_preview.LocalTimeRows > 0)
+        {
+            <div class="small text-warning mb-2">⚠ @_preview.LocalTimeRows flight(s) are marked as local time (Timezone “L”). They'll be imported with the times as written — check them afterwards.</div>
+        }
+        @if (_preview.Problems.Count > 0)
+        {
+            <details class="mb-3">
+                <summary class="small text-danger">@_preview.Problems.Count row(s) can't be read and will be left out</summary>
+                <ul class="small mt-2 mb-0">
+                    @foreach (var p in _preview.Problems.Take(100)) { <li>Line @p.Line: @p.Message</li> }
+                    @if (_preview.Problems.Count > 100) { <li>…and @(_preview.Problems.Count - 100) more</li> }
+                </ul>
+            </details>
+        }
+
+        @if (newFlights.Count > 0)
+        {
+            <div class="table-responsive mb-3">
+                <table class="table table-sm table-log mb-1">
+                    <thead><tr><th>Date</th><th>Flight</th><th>Route</th><th>Aircraft</th><th class="num">Time</th><th>Crew</th></tr></thead>
+                    <tbody>
+                        @foreach (var f in newFlights.Take(10))
+                        {
+                            <tr>
+                                <td>@f.OffBlock.ToString("dd/MM/yyyy HH:mm")</td>
+                                <td>@f.FlightNumber</td>
+                                <td>@f.Departure → @f.Arrival</td>
+                                <td>@f.TypeCode @f.Registration</td>
+                                <td class="num">@Fmt.Hm(f.TotalMinutes)</td>
+                                <td class="small">@string.Join(", ", f.People.Select(p => p.RoleCode is null ? p.Name : $"{p.Name} ({p.RoleCode})"))</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                @if (newFlights.Count > 10) { <div class="small-muted">…and @((newFlights.Count - 10).ToString("N0")) more.</div> }
+            </div>
+
+            <button class="btn btn-primary" @onclick="ImportAsync" disabled="@_busy">
+                @(_busy ? "Importing…" : $"Import {newFlights.Count:N0} flight{(newFlights.Count == 1 ? "" : "s")}")
+            </button>
+        }
+        else
+        {
+            <p class="mb-0">Nothing new to import — every flight in this file is already stored.</p>
+        }
+    </div></div>
+}
+
+@if (_result is not null)
+{
+    <div class="alert alert-success">
+        Imported @_result.Added.ToString("N0") flight(s)@(_result.Skipped > 0 ? $"; {_result.Skipped:N0} already stored were skipped" : "").
+        Added @_result.NewCrew crew member(s), @_result.NewAircraft aircraft and @_result.NewAirports airport(s).
+        <a href="/flights">View flights »</a>
+        @if (_result.NewAirports > 0)
+        {
+            <div class="small mt-1">New airports have no position yet — import airport data under Admin → Airports so day/night can be worked out for them.</div>
+        }
+    </div>
+}
+</ImportShell>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private const long MaxFileSize = 20 * 1024 * 1024;
+    private string _userId = default!;
+    private bool _busy, _reading;
+    private string? _error, _fileName;
+    private ImportPreview? _preview;
+    private LogbookAeroImporter.Result? _result;
+
+    protected override async Task OnInitializedAsync() =>
+        _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+    private async Task OnFileChosen(InputFileChangeEventArgs e)
+    {
+        _error = null; _preview = null; _result = null; _reading = true;
+        try
+        {
+            if (e.File.Size > MaxFileSize) { _error = "That file is larger than 20 MB."; return; }
+            _fileName = e.File.Name;
+            using var reader = new StreamReader(e.File.OpenReadStream(MaxFileSize));
+            var text = await reader.ReadToEndAsync();
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _preview = await LogbookAeroImporter.PreviewAsync(db, _userId, text);
+        }
+        catch (FormatException ex) { _error = ex.Message; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Reading logbook.aero CSV failed");
+            _error = $"Couldn't read the file: {ex.Message}";
+        }
+        finally { _reading = false; }
+    }
+
+    private async Task ImportAsync()
+    {
+        if (_preview is null) return;
+        _busy = true; _error = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            _result = await LogbookAeroImporter.ImportAsync(db, _userId, _preview);
+            _preview = null;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "logbook.aero import failed");
+            _error = $"Import failed — nothing was saved. {ex.GetBaseException().Message}";
+        }
+        finally { _busy = false; }
+    }
+}

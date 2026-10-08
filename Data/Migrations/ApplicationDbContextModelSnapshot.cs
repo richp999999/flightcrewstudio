@@ -418,8 +418,35 @@ namespace FlightCrewStudio.Data.Migrations
                     b.Property<long>("GlobaLogFlightId")
                         .HasColumnType("bigint");
 
+                    b.Property<int?>("LandingsDay")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LandingsNight")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("LastUpdatedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("LoggedCoPilotMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LoggedDualMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LoggedInstructorMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LoggedMultiEngineMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LoggedMultiPilotMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LoggedPicMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("LoggedSingleEngineMinutes")
+                        .HasColumnType("int");
 
                     b.Property<int?>("MyCrewRoleId")
                         .HasColumnType("int");
@@ -446,6 +473,10 @@ namespace FlightCrewStudio.Data.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("varchar(1000)");
 
+                    b.Property<string>("Source")
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
                     b.Property<DateTime?>("SourceCreatedAt")
                         .HasColumnType("datetime(6)");
 
@@ -454,6 +485,12 @@ namespace FlightCrewStudio.Data.Migrations
 
                     b.Property<string>("Status")
                         .HasColumnType("longtext");
+
+                    b.Property<int?>("TakeoffsDay")
+                        .HasColumnType("int");
+
+                    b.Property<int?>("TakeoffsNight")
+                        .HasColumnType("int");
 
                     b.Property<int>("TotalDayMinutes")
                         .HasColumnType("int");

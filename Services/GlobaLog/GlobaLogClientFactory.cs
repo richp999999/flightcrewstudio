@@ -9,7 +9,7 @@ public interface IGlobaLogClientFactory
     IGlobaLogClient Create(GlobaLogCredential credential);
 }
 
-public sealed class GlobaLogClientFactory(IOptions<GlobaLogOptions> options, ICredentialProtector protector)
+public sealed class GlobaLogClientFactory(IOptions<GlobaLogOptions> options, ICredentialProtector protector, ILoggerFactory loggers)
     : IGlobaLogClientFactory
 {
     private readonly GlobaLogOptions _opt = options.Value;
@@ -21,13 +21,13 @@ public sealed class GlobaLogClientFactory(IOptions<GlobaLogOptions> options, ICr
             var token = protector.Unprotect(credential.ApiTokenCipher);
             if (string.IsNullOrWhiteSpace(token))
                 throw new GlobaLogException("No GlobaLog API token saved. Add one in Settings.");
-            return new TokenGlobaLogClient(_opt.BaseUrl, token, _opt.TimeoutSeconds);
+            return new TokenGlobaLogClient(_opt.BaseUrl, token, _opt.TimeoutSeconds, loggers.CreateLogger<TokenGlobaLogClient>());
         }
 
         var username = protector.Unprotect(credential.UsernameCipher);
         var password = protector.Unprotect(credential.PasswordCipher);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
             throw new GlobaLogException("No GlobaLog username/password saved. Add them in Settings.");
-        return new WebSessionGlobaLogClient(_opt.BaseUrl, username, password, _opt.TimeoutSeconds);
+        return new WebSessionGlobaLogClient(_opt.BaseUrl, username, password, _opt.TimeoutSeconds, loggers.CreateLogger<WebSessionGlobaLogClient>());
     }
 }

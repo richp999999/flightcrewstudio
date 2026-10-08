@@ -1,0 +1,8 @@
+@page "/import"
+@attribute [Authorize]
+@inject NavigationManager Nav
+
+@* The Import menu item opens the first import source. *@
+@code {
+    protected override void OnInitialized() => Nav.NavigateTo("/import/logbook-aero", replace: true);
+}

@@ -3,7 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace FlightCrewStudio.Services.DayNight;
 
-/// <summary>Recalculates day/night time for every stored flight (all users).</summary>
+/// <summary>Recalculates day/night time and the night-landing flag for every stored flight (all users).</summary>
 public sealed class DayNightRecalculator(IDbContextFactory<ApplicationDbContext> dbFactory)
 {
     public sealed record Result(int Flights, int Updated, int Unchanged, int CannotCalculate, IReadOnlyList<string> MissingAirports);
@@ -23,7 +23,7 @@ public sealed class DayNightRecalculator(IDbContextFactory<ApplicationDbContext>
                 .Where(f => chunk.Contains(f.Id)).ToListAsync(ct);
             foreach (var f in flights)
             {
-                var r = FlightDayNight.Calculate(f.OffBlock, f.OnBlock, f.DepartureAirport, f.ArrivalAirport, out _);
+                var r = FlightDayNight.Calculate(f.OffBlock, f.OnBlock, f.DepartureAirport, f.ArrivalAirport, out _, f.ArrivalTime);
                 if (r is null)
                 {
                     cannot++;
@@ -31,9 +31,11 @@ public sealed class DayNightRecalculator(IDbContextFactory<ApplicationDbContext>
                     if (f.ArrivalAirport is { Latitude: null } a) missing.Add(a.Icao);
                     continue;
                 }
-                if (f.TotalDayMinutes == r.Value.DayMinutes && f.TotalNightMinutes == r.Value.NightMinutes) { unchanged++; continue; }
+                if (f.TotalDayMinutes == r.Value.DayMinutes && f.TotalNightMinutes == r.Value.NightMinutes
+                    && f.NightLanding == r.Value.NightLanding) { unchanged++; continue; }
                 f.TotalDayMinutes = r.Value.DayMinutes;
                 f.TotalNightMinutes = r.Value.NightMinutes;
+                f.NightLanding = r.Value.NightLanding;
                 updated++;
             }
             await batch.SaveChangesAsync(ct);

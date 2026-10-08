@@ -12,6 +12,9 @@ public enum NightDefinition
 /// <summary>Day and night time for one flight, in whole minutes (Day + Night = block time).</summary>
 public readonly record struct DayNightResult(int DayMinutes, int NightMinutes)
 {
+    /// <summary>Whether it was night at the destination at landing (set by <see cref="FlightDayNight"/>).</summary>
+    public bool NightLanding { get; init; }
+
     public int TotalMinutes => DayMinutes + NightMinutes;
 }
 

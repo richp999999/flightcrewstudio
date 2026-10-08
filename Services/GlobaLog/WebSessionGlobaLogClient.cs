@@ -40,7 +40,7 @@ public sealed partial class WebSessionGlobaLogClient : IGlobaLogClient
     [GeneratedRegex("name=\"authenticity_token\"[^>]*value=\"([^\"]+)\"", RegexOptions.IgnoreCase)]
     private static partial Regex AuthTokenRegex();
 
-    public WebSessionGlobaLogClient(string baseUrl, string username, string password, int timeoutSeconds)
+    public WebSessionGlobaLogClient(string baseUrl, string username, string password, int timeoutSeconds, ILogger? logger = null)
     {
         _username = username;
         _password = password;
@@ -50,7 +50,8 @@ public sealed partial class WebSessionGlobaLogClient : IGlobaLogClient
             UseCookies = true,
             AllowAutoRedirect = false // Devise returns 302 on success; we want to see it
         };
-        _http = new HttpClient(_handler)
+        // Retries requests that fail to connect (e.g. a dropped TLS handshake) before giving up.
+        _http = new HttpClient(new TransientRetryHandler(_handler, logger))
         {
             BaseAddress = new Uri(baseUrl.TrimEnd('/')),
             Timeout = TimeSpan.FromSeconds(timeoutSeconds)

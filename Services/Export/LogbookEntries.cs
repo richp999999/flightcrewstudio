@@ -29,7 +29,11 @@ public sealed record LogbookEntry
     public string? Registration { get; init; }        // "G-HLYH"
 
     public int TotalMinutes { get; init; }
+    public int SingleEngineMinutes { get; init; }
+    public int MultiEngineMinutes { get; init; }
     public int MultiPilotMinutes { get; init; }
+    public int DualMinutes { get; init; }
+    public int InstructorMinutes { get; init; }
     public int NightMinutes { get; init; }
     public int IfrMinutes { get; init; }
     public int PicMinutes { get; init; }
@@ -58,7 +62,8 @@ public readonly record struct LogbookTotals(long MultiPilot, long Total, int Lan
         a.MultiEngine + b.MultiEngine, a.Dual + b.Dual, a.Instructor + b.Instructor, a.Simulator + b.Simulator);
 
     public static LogbookTotals Of(IEnumerable<LogbookEntry> entries) => entries.Aggregate(new LogbookTotals(), (t, e) => t + new LogbookTotals(
-        e.MultiPilotMinutes, e.TotalMinutes, e.LandingsDay, e.LandingsNight, e.NightMinutes, e.IfrMinutes, e.PicMinutes, e.CoPilotMinutes));
+        e.MultiPilotMinutes, e.TotalMinutes, e.LandingsDay, e.LandingsNight, e.NightMinutes, e.IfrMinutes, e.PicMinutes, e.CoPilotMinutes,
+        e.SingleEngineMinutes, e.MultiEngineMinutes, e.DualMinutes, e.InstructorMinutes));
 
     /// <summary>The opening balances from Settings → Previous Experience.</summary>
     public static LogbookTotals Of(PreviousExperience p) => new(
@@ -110,8 +115,10 @@ public static class LogbookEntries
     {
         var block = Fmt.BlockMinutes(f);
         var role = f.MyCrewRoleId;
-        var isPic = role == CrewRole.CaptainId;
-        var isCoPilot = role is CrewRole.FirstOfficerId or CrewRole.SecondOfficerId;
+        // Function time: the flight's logged figures when it has them (imported flights), else from my role.
+        var picMinutes = f.LoggedPicMinutes ?? (role == CrewRole.CaptainId ? block : 0);
+        var coPilotMinutes = f.LoggedCoPilotMinutes ?? (role is CrewRole.FirstOfficerId or CrewRole.SecondOfficerId ? block : 0);
+        var isPic = picMinutes > 0;
 
         var deck = f.Crew.Where(c => c.CrewRole?.IsFlightDeck == true).OrderBy(c => c.Position).ToList();
         var captain = deck.FirstOrDefault(c => c.CrewRoleId == CrewRole.CaptainId && c.CrewMemberId != myCrewId);
@@ -137,24 +144,27 @@ public static class LogbookEntries
             TypeModel = type?.Name,
             Registration = f.Aircraft?.DisplayRegistration,
             TotalMinutes = block,
-            MultiPilotMinutes = block,           // airline flying: every aircraft is multi-pilot
+            SingleEngineMinutes = f.LoggedSingleEngineMinutes ?? 0,
+            MultiEngineMinutes = f.LoggedMultiEngineMinutes ?? 0,
+            MultiPilotMinutes = f.LoggedMultiPilotMinutes ?? block,   // airline flying: multi-pilot unless logged otherwise
+            DualMinutes = f.LoggedDualMinutes ?? 0,
+            InstructorMinutes = f.LoggedInstructorMinutes ?? 0,
             NightMinutes = Math.Min(f.TotalNightMinutes, block),
             IfrMinutes = Math.Min(f.TotalInstrMinutes, block),
-            PicMinutes = isPic ? block : 0,
-            CoPilotMinutes = isCoPilot ? block : 0,
+            PicMinutes = picMinutes,
+            CoPilotMinutes = coPilotMinutes,
             PicName = picName,
             PilotFlying = f.PilotFlying,
-            TakeoffsDay = pf && !nightTakeoff ? 1 : 0,
-            TakeoffsNight = nightTakeoff ? 1 : 0,
-            LandingsDay = pf && !f.NightLanding ? 1 : 0,
-            LandingsNight = pf && f.NightLanding ? 1 : 0,
+            TakeoffsDay = f.TakeoffsDay ?? (pf && !nightTakeoff ? 1 : 0),
+            TakeoffsNight = f.TakeoffsNight ?? (nightTakeoff ? 1 : 0),
+            LandingsDay = f.LandingsDay ?? (pf && !f.NightLanding ? 1 : 0),
+            LandingsNight = f.LandingsNight ?? (pf && f.NightLanding ? 1 : 0),
             NightLanding = f.NightLanding,
             Remarks = f.Remarks,
             FlightDeck = deck.Select(c => new LogbookPerson(
                     c.CrewMemberId == myCrewId && !string.IsNullOrWhiteSpace(myName) ? myName : c.CrewMember?.DisplayName ?? "",
-                    c.CrewRoleId == CrewRole.CaptainId ? "PIC" : "COP"))
+                    FlightCrewStudio.Services.Import.LogbookAeroImporter.RoleCode(c.CrewRole?.Name)))
                 .Where(p => p.Name.Length > 0)
-                .Take(3)
                 .ToList(),
         };
     }

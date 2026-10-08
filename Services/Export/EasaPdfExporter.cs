@@ -218,8 +218,8 @@ public static class EasaPdfExporter
                 Cell(t, e?.OnBlock?.ToString("HH:mm", CultureInfo.InvariantCulture));
                 Cell(t, e?.TypeCode, left: true);
                 Cell(t, e?.Registration, left: true);
-                Cell(t, null);                                      // SE
-                Cell(t, null);                                      // ME
+                Cell(t, Hm(e?.SingleEngineMinutes));
+                Cell(t, Hm(e?.MultiEngineMinutes));
                 Cell(t, Hm(e?.MultiPilotMinutes));
                 Cell(t, Hm(e?.TotalMinutes));
                 Cell(t, e?.PicName, left: true);
@@ -229,8 +229,8 @@ public static class EasaPdfExporter
                 Cell(t, Hm(e?.IfrMinutes));
                 Cell(t, Hm(e?.PicMinutes));
                 Cell(t, Hm(e?.CoPilotMinutes));
-                Cell(t, null);                                      // Dual
-                Cell(t, null);                                      // Instructor
+                Cell(t, Hm(e?.DualMinutes));
+                Cell(t, Hm(e?.InstructorMinutes));
                 Cell(t, null);                                      // FSTD device
                 Cell(t, null);                                      // FSTD time
                 Cell(t, e?.Remarks, left: true);

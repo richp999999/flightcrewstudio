@@ -6,7 +6,8 @@ namespace FlightCrewStudio.Services.Export;
 /// <summary>
 /// Writes the logbook as CSV in logbook.aero's export layout (same columns, same formats: dates
 /// yyyy-MM-dd, times HH:mm UTC with Timezone "U", durations h:mm), so the file can be imported
-/// into logbook.aero or opened in a spreadsheet.
+/// into logbook.aero or opened in a spreadsheet. There are at least three PersonN / RoleN column
+/// pairs, and more when a flight has more flight-deck crew (as logbook.aero does).
 /// </summary>
 public static class LogbookCsvExporter
 {
@@ -22,15 +23,23 @@ public static class LogbookCsvExporter
         "Custom1_Number", "Custom2_Number", "Custom3_Number", "Custom4_Number", "Category", "Flight_Tags",
         "TachoStart", "TachoEnd", "HobbsStart", "HobbsEnd", "Duty_Start", "Duty_End", "Duty_Time",
         "CostRental", "CostInstructor", "CostLanding", "CostParking", "CostHandling", "CostFuel", "CostOther",
-        "Person1", "Role1", "Person2", "Role2", "Person3", "Role3",
+        PersonColumnsMarker,
         "Approach1_Landing", "Approach1_Approach", "Approach1_Quantity", "Approach1_Airfield", "Approach1_Runway", "Approach1_Text",
     ];
 
+    private const string PersonColumnsMarker = "<persons>";
+
     public static byte[] Write(IEnumerable<LogbookEntry> entries)
     {
+        var list = entries.ToList();
+        var people = Math.Max(3, list.Count == 0 ? 0 : list.Max(e => e.FlightDeck.Count));
+        var columns = Columns.SelectMany(c => c == PersonColumnsMarker
+            ? Enumerable.Range(1, people).SelectMany(i => new[] { $"Person{i}", $"Role{i}" })
+            : [c]).ToList();
+
         var sb = new StringBuilder();
-        sb.Append(string.Join(",", Columns)).Append('\n');
-        foreach (var e in entries)
+        sb.Append(string.Join(",", columns)).Append('\n');
+        foreach (var e in list)
         {
             var v = new Dictionary<string, string?>
             {
@@ -54,6 +63,8 @@ public static class LogbookCsvExporter
                 ["IFR_Time"] = Hm(e.IfrMinutes),
                 ["PIC_Time"] = Hm(e.PicMinutes),
                 ["CoPilot_Time"] = Hm(e.CoPilotMinutes),
+                ["Dual_Time"] = Hm(e.DualMinutes),
+                ["Instructor_Time"] = Hm(e.InstructorMinutes),
                 ["Remarks"] = e.Remarks,
                 ["Pilot_Flying"] = e.PilotFlying == true ? "1" : "0",
                 ["Pilot_Monitoring"] = e.PilotFlying == false ? "1" : "0",
@@ -67,7 +78,7 @@ public static class LogbookCsvExporter
                 v[$"Person{i + 1}"] = e.FlightDeck[i].Name;
                 v[$"Role{i + 1}"] = e.FlightDeck[i].Role;
             }
-            sb.Append(string.Join(",", Columns.Select(c => Quote(v.GetValueOrDefault(c))))).Append('\n');
+            sb.Append(string.Join(",", columns.Select(c => Quote(v.GetValueOrDefault(c))))).Append('\n');
         }
         return new UTF8Encoding(false).GetBytes(sb.ToString());
     }

@@ -198,8 +198,8 @@
         var block = Fmt.BlockMinutes(f);
         return new Totals(
             t.Block + block,
-            t.Captain + (f.MyCrewRoleId == CrewRole.CaptainId ? block : 0),
-            t.CoPilot + (f.MyCrewRoleId is CrewRole.FirstOfficerId or CrewRole.SecondOfficerId ? block : 0),
+            t.Captain + (f.LoggedPicMinutes ?? (f.MyCrewRoleId == CrewRole.CaptainId ? block : 0)),
+            t.CoPilot + (f.LoggedCoPilotMinutes ?? (f.MyCrewRoleId is CrewRole.FirstOfficerId or CrewRole.SecondOfficerId ? block : 0)),
             t.Night + f.TotalNightMinutes,
             t.Instr + f.TotalInstrMinutes,
             t.Flights + 1,
