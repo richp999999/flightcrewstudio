@@ -1,0 +1,44 @@
+@page "/admin"
+@attribute [Authorize(Policy = "Admin")]
+
+@using FlightCrewStudio.Components.Shared
+
+<PageTitle>Admin · FlightCrewStudio</PageTitle>
+
+<AdminShell>
+    <p class="text-muted">Administrator tools. Choose a section from the menu.</p>
+    <div class="row g-3">
+        <div class="col-lg-6">
+            <a class="card h-100 text-reset text-decoration-none" href="/admin/airports">
+                <div class="card-body">
+                    <h5 class="card-title">Airports</h5>
+                    <p class="card-text text-muted mb-0">The shared list of airports used for flight departures and arrivals. Import from an OurAirports airports.csv, add, edit and remove.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-lg-6">
+            <a class="card h-100 text-reset text-decoration-none" href="/admin/countries">
+                <div class="card-body">
+                    <h5 class="card-title">Countries</h5>
+                    <p class="card-text text-muted mb-0">Countries airports belong to. Import from an OurAirports countries.csv.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-lg-6">
+            <a class="card h-100 text-reset text-decoration-none" href="/admin/regions">
+                <div class="card-body">
+                    <h5 class="card-title">Regions</h5>
+                    <p class="card-text text-muted mb-0">Regions within countries (e.g. GB-ENG). Import from an OurAirports regions.csv.</p>
+                </div>
+            </a>
+        </div>
+        <div class="col-lg-6">
+            <a class="card h-100 text-reset text-decoration-none" href="/admin/maintenance">
+                <div class="card-body">
+                    <h5 class="card-title">Maintenance</h5>
+                    <p class="card-text text-muted mb-0">Recalculate day/night time for all flights.</p>
+                </div>
+            </a>
+        </div>
+    </div>
+</AdminShell>

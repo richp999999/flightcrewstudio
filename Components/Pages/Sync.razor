@@ -1,0 +1,175 @@
+@page "/sync"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@implements IDisposable
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Services.Sync
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ISyncService SyncService
+@inject SyncProgressTracker Tracker
+
+<PageTitle>Sync</PageTitle>
+
+<div class="page-head"><h1>Sync with GlobaLog</h1></div>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <div class="row g-4">
+        <div class="col-xl-6">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Last synced</h5>
+                    <p class="card-text">
+                        Flights with an off-block time at or before this point are treated as already
+                        fetched. Move it back to re-download earlier flights (they will be matched and
+                        updated in place, not duplicated).
+                    </p>
+
+                    <div class="mb-2">
+                        <label class="form-label">High-water mark (UTC)</label>
+                        <input type="datetime-local" class="form-control" @bind="_highWater" step="1" />
+                    </div>
+                    <div class="d-flex gap-2 align-items-center">
+                        <button class="btn btn-outline-secondary" @onclick="SaveHighWaterAsync" disabled="@_progress.IsRunning">Save date</button>
+                        <button class="btn btn-outline-danger" @onclick="ClearHighWaterAsync" disabled="@_progress.IsRunning">Clear (full re-sync)</button>
+                    </div>
+
+                    <hr />
+                    <p class="mb-1"><strong>Last run:</strong> @(_lastRunAt?.ToString("u") ?? "never")</p>
+                    <p class="mb-0 text-muted">@_lastRunMessage</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-6">
+            <div class="card">
+                <div class="card-body">
+                    <h5 class="card-title">Run a sync</h5>
+
+                    @if (_progress.IsRunning)
+                    {
+                        <button class="btn btn-danger mb-3" @onclick="Cancel">Cancel sync</button>
+                    }
+                    else
+                    {
+                        <button class="btn btn-primary mb-3" @onclick="StartSync">Sync now</button>
+                    }
+
+                    <div class="mb-2">
+                        <span class="badge bg-@PhaseColor">@_progress.Phase</span>
+                        @if (_progress.Message is not null)
+                        {
+                            <span class="ms-2">@_progress.Message</span>
+                        }
+                    </div>
+
+                    @if (_progress.IsRunning || _progress.Phase == SyncPhase.Completed)
+                    {
+                        <div class="progress mb-3" role="progressbar">
+                            <div class="progress-bar @(_progress.IsRunning ? "progress-bar-striped progress-bar-animated" : "")"
+                                 style="width: @(ProgressPercent)%">@ProgressPercent%</div>
+                        </div>
+                    }
+
+                    <ul class="list-unstyled mb-0">
+                        <li>Page: @_progress.CurrentPage@(_progress.TotalPages > 0 ? $" / {_progress.TotalPages}" : "")</li>
+                        <li>Flights processed: @_progress.FlightsSeen</li>
+                        <li>New: @_progress.NewFlights &nbsp;|&nbsp; Updated: @_progress.UpdatedFlights</li>
+                    </ul>
+
+                    @if (!string.IsNullOrEmpty(_progress.Error))
+                    {
+                        <div class="alert alert-danger mt-3 mb-0">@_progress.Error</div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loaded;
+    private string _userId = default!;
+    private SyncProgress _progress = new();
+
+    private DateTime? _highWater;
+    private DateTime? _lastRunAt;
+    private string? _lastRunMessage;
+
+    private int ProgressPercent =>
+        _progress.Phase == SyncPhase.Completed ? 100 :
+        _progress.TotalPages > 0 ? Math.Min(100, (int)(100.0 * _progress.CurrentPage / _progress.TotalPages)) :
+        _progress.IsRunning ? 10 : 0;
+
+    private string PhaseColor => _progress.Phase switch
+    {
+        SyncPhase.Completed => "success",
+        SyncPhase.Failed => "danger",
+        SyncPhase.Idle => "secondary",
+        _ => "info"
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var state = await db.SyncStates.AsNoTracking().FirstOrDefaultAsync(s => s.UserId == _userId);
+        _highWater = state?.LastSyncedThrough;
+        _lastRunAt = state?.LastRunAt;
+        _lastRunMessage = state?.LastRunMessage;
+
+        _progress = Tracker.GetOrCreate(_userId);
+        _progress.Changed += OnProgressChanged;
+        _loaded = true;
+    }
+
+    private void OnProgressChanged() => InvokeAsync(async () =>
+    {
+        if (_progress.Phase is SyncPhase.Completed or SyncPhase.Failed)
+            await RefreshStateAsync();
+        StateHasChanged();
+    });
+
+    private async Task RefreshStateAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var state = await db.SyncStates.AsNoTracking().FirstOrDefaultAsync(s => s.UserId == _userId);
+        _highWater = state?.LastSyncedThrough;
+        _lastRunAt = state?.LastRunAt;
+        _lastRunMessage = state?.LastRunMessage;
+    }
+
+    private void StartSync() => SyncService.StartSync(_userId);
+
+    private void Cancel() => SyncService.CancelSync(_userId);
+
+    private async Task SaveHighWaterAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var state = await db.SyncStates.FirstOrDefaultAsync(s => s.UserId == _userId)
+                    ?? db.SyncStates.Add(new SyncState { UserId = _userId }).Entity;
+        state.LastSyncedThrough = _highWater.HasValue
+            ? DateTime.SpecifyKind(_highWater.Value, DateTimeKind.Utc)
+            : null;
+        await db.SaveChangesAsync();
+    }
+
+    private async Task ClearHighWaterAsync()
+    {
+        _highWater = null;
+        await SaveHighWaterAsync();
+    }
+
+    public void Dispose() => _progress.Changed -= OnProgressChanged;
+}

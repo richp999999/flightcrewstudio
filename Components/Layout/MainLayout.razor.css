@@ -1,0 +1,29 @@
+.site-footer {
+    display: flex; flex-wrap: wrap; gap: 0; font-size: .85rem; color: #4f4f4f;
+    border-top: 1px solid #e0e0e0; padding-top: 1rem; margin-top: 1rem;
+}
+
+.site-footer span + span::before {
+    content: ""; display: inline-block; width: 1px; height: .9em; background: #bdbdbd; margin: 0 .6rem; vertical-align: -1px;
+}
+
+#blazor-error-ui {
+    color-scheme: light only;
+    background: lightyellow;
+    bottom: 0;
+    box-shadow: 0 -1px 2px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+    display: none;
+    left: 0;
+    padding: 0.6rem 1.25rem 0.7rem 1.25rem;
+    position: fixed;
+    width: 100%;
+    z-index: 1000;
+}
+
+    #blazor-error-ui .dismiss {
+        cursor: pointer;
+        position: absolute;
+        right: 0.75rem;
+        top: 0.5rem;
+    }

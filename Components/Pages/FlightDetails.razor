@@ -1,0 +1,473 @@
+@page "/flights/{Id:int}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Globalization
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using Microsoft.Extensions.Options
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.GlobaLog
+@using FlightCrewStudio.Services.Sync
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+@inject IOptions<GlobaLogOptions> GlobaLogOpts
+
+<PageTitle>@(_m is null ? "Flight" : $"{_m.Name} {_m.OffBlock:dd/MM/yyyy}") · FlightCrewStudio</PageTitle>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_m is null)
+{
+    <div class="page-head"><h1>Flight not found</h1></div>
+    <a href="/flights">« Back to flights</a>
+}
+else
+{
+    <div class="page-head">
+        <h1>
+            @(_m.Name ?? "Flight")
+            <span class="text-muted fs-5 ms-2">@IcaoOf(_m.DepartureAirportId) → @IcaoOf(_m.ArrivalAirportId) · @_m.OffBlock?.ToString("ddd dd/MM/yyyy")</span>
+        </h1>
+        <div class="actions">
+            <a href="/flights">« Flights</a>
+            @if (_globaLogUrl is not null)
+            {
+                <a href="@_globaLogUrl" target="_blank" rel="noopener">Open in GlobaLog ↗</a>
+            }
+        </div>
+    </div>
+
+    @if (_editedLocally)
+    {
+        <div class="alert alert-secondary d-flex flex-wrap justify-content-between align-items-center gap-2 py-2">
+            <span>Edited here @(_editedAt?.ToString("dd/MM/yyyy HH:mm") + " UTC") — sync won't overwrite this flight.</span>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="RevertToSyncAsync" disabled="@_busy">Let sync update it again</button>
+        </div>
+    }
+
+    <div class="d-flex flex-wrap align-items-center gap-4 mb-4 flight-summary">
+        <div><div class="small-muted">BLOCK</div><div class="fs-3 fw-medium">@Fmt.HmZero(BlockMinutes)</div></div>
+        <div><div class="small-muted">AIR</div><div class="fs-5">@Fmt.HmZero(AirMinutes)</div></div>
+        <div><div class="small-muted">RADIATION</div><div class="fs-5">@(_m.RadiationAmount is { } rad ? $"{rad:0.#} µSv" : "—")</div></div>
+        <div><div class="small-muted">MY ROLE</div><div class="fs-5">@(RoleName(EffectiveMyRoleId) ?? "—")</div></div>
+    </div>
+
+    <div class="row g-4">
+        <!-- ---------------- Flight ---------------- -->
+        <div class="col-lg-6">
+            <div class="card h-100"><div class="card-body">
+                <h5 class="card-title">Flight</h5>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label small">Flight no. / callsign</label>
+                        <input class="form-control" @bind="_m.Name" />
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small">Status</label>
+                        <input class="form-control" @bind="_m.Status" />
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Aircraft</label>
+                        <select class="form-select" @bind="AircraftIdText">
+                            <option value="">—</option>
+                            @foreach (var ac in _aircraft)
+                            {
+                                <option value="@ac.Id">@ac.DisplayRegistration@(ac.AircraftType is null ? "" : $" — {ac.AircraftType.Name}")</option>
+                            }
+                        </select>
+                    </div>
+                </div>
+
+                <h6 class="mt-4 mb-2">Times (UTC)</h6>
+                <div class="row g-2">
+                    <div class="col-sm-6"><label class="form-label small">Off block</label><input type="datetime-local" class="form-control" @bind="_m.OffBlock" @bind:after="RecalcDayNight" /></div>
+                    <div class="col-sm-6"><label class="form-label small">Take-off</label><input type="datetime-local" class="form-control" @bind="_m.DepartureTime" /></div>
+                    <div class="col-sm-6"><label class="form-label small">Landing</label><input type="datetime-local" class="form-control" @bind="_m.ArrivalTime" /></div>
+                    <div class="col-sm-6"><label class="form-label small">On block</label><input type="datetime-local" class="form-control" @bind="_m.OnBlock" @bind:after="RecalcDayNight" /></div>
+                </div>
+            </div></div>
+        </div>
+
+        <!-- ---------------- Route ---------------- -->
+        <div class="col-lg-6">
+            <div class="card h-100"><div class="card-body">
+                <h5 class="card-title">Route</h5>
+                <div class="mb-3">
+                    <label class="form-label small">Departure</label>
+                    <AirportPicker Value="_m.DepartureAirportId" ValueChanged="@(id => OnAirportChanged(true, id))" />
+                </div>
+                <div class="mb-1">
+                    <label class="form-label small">Arrival</label>
+                    <AirportPicker Value="_m.ArrivalAirportId" ValueChanged="@(id => OnAirportChanged(false, id))" />
+                </div>
+            </div></div>
+        </div>
+
+        <!-- ---------------- Logbook ---------------- -->
+        <div class="col-lg-6">
+            <div class="card h-100"><div class="card-body">
+                <h5 class="card-title">Logbook</h5>
+                <div class="row g-2">
+                    <div class="col-4">
+                        <label class="form-label small">Day (h:mm)</label>
+                        <input class="form-control" @bind="DayText" disabled="@_dayNightCalculated" title="@(_dayNightCalculated ? "Calculated from the times and route" : null)" />
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label small">Night (h:mm)</label>
+                        <input class="form-control" @bind="NightText" disabled="@_dayNightCalculated" title="@(_dayNightCalculated ? "Calculated from the times and route" : null)" />
+                    </div>
+                    <div class="col-4"><label class="form-label small">IFR (h:mm)</label><input class="form-control" @bind="InstrText" /></div>
+                    <div class="col-12 form-text mt-0">
+                        @if (_dayNightCalculated) { <span>Day and night are calculated from the off-/on-block times along the great-circle route (sunset to sunrise is night).</span> }
+                        else if (_dayNightReason is not null) { <span class="text-warning-emphasis">Day/night can't be calculated: @_dayNightReason You can enter them by hand.</span> }
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small">Radiation (µSv)</label>
+                        <input type="number" step="0.1" class="form-control" @bind="_m.RadiationAmount" />
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small">My role</label>
+                        @if (_myRoleFromCrew)
+                        {
+                            <select class="form-select" disabled title="Set from your row in the crew list">
+                                <option>@RoleName(EffectiveMyRoleId)</option>
+                            </select>
+                            <div class="form-text">From your entry in the crew list.</div>
+                        }
+                        else
+                        {
+                            <select class="form-select" @bind="MyRoleIdText">
+                                <option value="">—</option>
+                                @foreach (var role in _roles) { <option value="@role.Id">@role.Name</option> }
+                            </select>
+                        }
+                    </div>
+                    <div class="col-12 d-flex flex-wrap gap-4 mt-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="nl" @bind="_m.NightLanding" />
+                            <label class="form-check-label" for="nl">Night landing</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="pf" checked="@(_m.PilotFlying == true)"
+                                   @onchange="@(e => _m.PilotFlying = (bool)e.Value!)" />
+                            <label class="form-check-label" for="pf">Pilot flying</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Remarks</label>
+                        <textarea class="form-control" rows="3" maxlength="1000" @bind="_m.Remarks"></textarea>
+                    </div>
+                </div>
+            </div></div>
+        </div>
+
+        <!-- ---------------- Crew ---------------- -->
+        <div class="col-lg-6">
+            <div class="card h-100"><div class="card-body">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="card-title mb-0">Crew</h5>
+                    <button class="btn btn-sm btn-soft" @onclick="AddCrewRow">+ Add crew member</button>
+                </div>
+                <p class="small-muted mt-1 mb-2">Pick from your existing crew members. New people are added to the crew list by sync.</p>
+
+                @if (_crew.Count == 0)
+                {
+                    <p class="text-muted mb-0">No crew recorded.</p>
+                }
+                else
+                {
+                    <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th style="width:2.5rem"></th><th>Name</th><th style="width:36%">Role</th><th style="width:2.5rem"></th></tr></thead>
+                        <tbody>
+                            @foreach (var row in _crew)
+                            {
+                                var r = row;
+                                var member = r.CrewMemberId is { } mid ? _members.GetValueOrDefault(mid) : null;
+                                <tr>
+                                    <td>
+                                        <span class="avatar" style="background:@Fmt.AvatarColour(r.CrewMemberId ?? 0)">@(member is null ? "?" : Fmt.Initials(member))</span>
+                                    </td>
+                                    <td>
+                                        <select class="form-select form-select-sm @(r.CrewMemberId is null ? "is-invalid" : "")"
+                                                value="@r.CrewMemberId" @onchange="@(e => r.CrewMemberId = int.TryParse(e.Value?.ToString(), out var v) ? v : null)">
+                                            <option value="">Choose crew member…</option>
+                                            @foreach (var m in _memberOptions)
+                                            {
+                                                <option value="@m.Id" selected="@(m.Id == r.CrewMemberId)">@m.DisplayName@(m.Id == _myCrewMemberId ? " (you)" : "")</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td>
+                                        <select class="form-select form-select-sm"
+                                                value="@r.CrewRoleId" @onchange="@(e => r.CrewRoleId = int.TryParse(e.Value?.ToString(), out var v) ? v : null)">
+                                            <option value="">—</option>
+                                            @foreach (var role in _roles)
+                                            {
+                                                <option value="@role.Id" selected="@(role.Id == r.CrewRoleId)">@role.Name</option>
+                                            }
+                                        </select>
+                                    </td>
+                                    <td><button class="btn btn-sm btn-link text-danger p-0" title="Remove" @onclick="() => _crew.Remove(r)">✕</button></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                }
+            </div></div>
+        </div>
+
+        <!-- ---------------- Source ---------------- -->
+        <div class="col-12">
+            <p class="small-muted mb-0">
+                GlobaLog flight id @_m.GlobaLogFlightId ·
+                first downloaded @_m.FetchedAt.ToString("dd/MM/yyyy HH:mm") UTC ·
+                last updated @_m.LastUpdatedAt.ToString("dd/MM/yyyy HH:mm") UTC
+            </p>
+        </div>
+    </div>
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span>
+        }
+        <button class="btn btn-outline-secondary" @onclick="LoadAsync" disabled="@_busy">Discard changes</button>
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">Save</button>
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loaded, _busy, _statusOk;
+    private string? _status;
+    private string _userId = default!;
+    private Flight? _m;                 // detached copy being edited
+    private bool _editedLocally;
+    private DateTime? _editedAt;
+    private string? _globaLogUrl;
+    private int? _myCrewMemberId;
+    private List<CrewRow> _crew = new();
+    private List<CrewRole> _roles = new();
+    private List<Aircraft> _aircraft = new();
+    private string? _depIcao, _arrIcao;   // for the page heading
+    private Airport? _depAirport, _arrAirport;
+    private bool _dayNightCalculated;
+    private string? _dayNightReason;
+
+    /// <summary>Recalculate day/night whenever block times or airports change.</summary>
+    private void RecalcDayNight()
+    {
+        if (_m is null) return;
+        var r = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason);
+        _dayNightCalculated = r is not null;
+        if (r is { } v) { _m.TotalDayMinutes = v.DayMinutes; _m.TotalNightMinutes = v.NightMinutes; }
+    }
+
+    private string IcaoOf(int? id) => id is null ? "???" : (id == _m?.DepartureAirportId ? _depIcao : _arrIcao) ?? "???";
+
+    private async Task OnAirportChanged(bool departure, int? id)
+    {
+        if (_m is null) return;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var ap = id is null ? null : await db.Airports.AsNoTracking().FirstOrDefaultAsync(a => a.Id == id);
+        if (departure) { _m.DepartureAirportId = id; _depIcao = ap?.Icao; _depAirport = ap; }
+        else { _m.ArrivalAirportId = id; _arrIcao = ap?.Icao; _arrAirport = ap; }
+        RecalcDayNight();
+    }
+
+    private string AircraftIdText
+    {
+        get => _m?.AircraftId?.ToString() ?? "";
+        set { if (_m is not null) _m.AircraftId = int.TryParse(value, out var v) ? v : null; }
+    }
+    private List<CrewMember> _memberOptions = new();
+    private Dictionary<int, CrewMember> _members = new();
+
+    private sealed class CrewRow
+    {
+        public int? CrewMemberId { get; set; }
+        public int? CrewRoleId { get; set; }
+    }
+
+    // ---- derived values -------------------------------------------------------------
+    private int BlockMinutes => _m is null ? 0 : Fmt.BlockMinutes(_m);
+    private int AirMinutes => _m?.DepartureTime is { } a && _m.ArrivalTime is { } b && b > a ? (int)Math.Round((b - a).TotalMinutes) : 0;
+
+    private CrewRow? MyRow => _myCrewMemberId is null ? null : _crew.FirstOrDefault(r => r.CrewMemberId == _myCrewMemberId);
+    private bool _myRoleFromCrew => MyRow?.CrewRoleId is not null;
+    private int? EffectiveMyRoleId => _myRoleFromCrew ? MyRow!.CrewRoleId : _m?.MyCrewRoleId;
+    private string? RoleName(int? id) => id is null ? null : _roles.FirstOrDefault(r => r.Id == id)?.Name;
+
+    private string MyRoleIdText
+    {
+        get => _m?.MyCrewRoleId?.ToString() ?? "";
+        set { if (_m is not null) _m.MyCrewRoleId = int.TryParse(value, out var v) ? v : null; }
+    }
+
+    private string DayText { get => Fmt.HmZero(_m!.TotalDayMinutes); set => _m!.TotalDayMinutes = ParseHm(value, _m.TotalDayMinutes); }
+    private string NightText { get => Fmt.HmZero(_m!.TotalNightMinutes); set => _m!.TotalNightMinutes = ParseHm(value, _m.TotalNightMinutes); }
+    private string InstrText { get => Fmt.HmZero(_m!.TotalInstrMinutes); set => _m!.TotalInstrMinutes = ParseHm(value, _m.TotalInstrMinutes); }
+
+    /// <summary>"3:39" → 219; "219" → 219 minutes; anything else keeps the old value.</summary>
+    private static int ParseHm(string? s, int fallback)
+    {
+        s = s?.Trim();
+        if (string.IsNullOrEmpty(s)) return 0;
+        var p = s.Split(':');
+        if (p.Length == 2 && int.TryParse(p[0], out var h) && int.TryParse(p[1], out var m) && m is >= 0 and < 60 && h >= 0) return h * 60 + m;
+        if (p.Length == 1 && int.TryParse(p[0], out var mins) && mins >= 0) return mins;
+        return fallback;
+    }
+
+    // ---- load -------------------------------------------------------------------------
+    protected override async Task OnParametersSetAsync()
+    {
+        _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        await LoadAsync();
+        _loaded = true;
+    }
+
+    private async Task LoadAsync()
+    {
+        _status = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _m = await db.Flights.AsNoTracking()
+            .Include(f => f.Crew).ThenInclude(c => c.CrewMember)
+            .FirstOrDefaultAsync(f => f.Id == Id && f.UserId == _userId);
+        if (_m is null) return;
+
+        _editedLocally = _m.EditedLocally;
+        _editedAt = _m.EditedAt;
+        _myCrewMemberId = await db.GlobaLogCredentials.AsNoTracking()
+            .Where(c => c.UserId == _userId).Select(c => c.MyCrewMemberId).FirstOrDefaultAsync();
+
+        _crew = _m.Crew.OrderBy(c => c.Position)
+            .Select(c => new CrewRow { CrewMemberId = c.CrewMemberId, CrewRoleId = c.CrewRoleId })
+            .ToList();
+
+        _depAirport = _m.DepartureAirportId is { } d ? await db.Airports.AsNoTracking().FirstOrDefaultAsync(a => a.Id == d) : null;
+        _arrAirport = _m.ArrivalAirportId is { } r ? await db.Airports.AsNoTracking().FirstOrDefaultAsync(a => a.Id == r) : null;
+        _depIcao = _depAirport?.Icao; _arrIcao = _arrAirport?.Icao;
+        // Show what the calculation gives for the stored times/route (stored values otherwise).
+        var dn = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason);
+        _dayNightCalculated = dn is not null;
+        if (dn is { } v0) { _m.TotalDayMinutes = v0.DayMinutes; _m.TotalNightMinutes = v0.NightMinutes; }
+        _aircraft = (await db.Aircraft.AsNoTracking().Include(a => a.AircraftType).Where(a => a.UserId == _userId).ToListAsync())
+            .OrderBy(a => a.AircraftType?.Name).ThenBy(a => a.Registration).ToList();
+        _roles = await db.CrewRoles.AsNoTracking().OrderBy(r => r.SortOrder).ThenBy(r => r.Name).ToListAsync();
+        _memberOptions = (await db.CrewMembers.AsNoTracking().Where(c => c.UserId == _userId).ToListAsync())
+            .OrderBy(c => c.Name is null).ThenBy(c => c.DisplayName).ToList();
+        _members = _memberOptions.ToDictionary(c => c.Id);
+
+        _globaLogUrl = $"{GlobaLogOpts.Value.BaseUrl.TrimEnd('/')}/flights/{_m.GlobaLogFlightId}";
+    }
+
+    private void AddCrewRow() => _crew.Add(new CrewRow { CrewRoleId = CrewRole.CabinCrewId });
+
+    // ---- save -------------------------------------------------------------------------
+    private async Task SaveAsync()
+    {
+        if (_m is null) return;
+        _busy = true; _status = null;
+        try
+        {
+            if (_m.OffBlock is { } ob && _m.OnBlock is { } onb && onb < ob)
+                throw new InvalidOperationException("On-block time is before off-block time.");
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var f = await db.Flights.Include(x => x.Crew)
+                .FirstOrDefaultAsync(x => x.Id == Id && x.UserId == _userId)
+                ?? throw new InvalidOperationException("This flight no longer exists.");
+
+            static string? T(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+            static string? U(string? s) => T(s)?.ToUpperInvariant();
+            static DateTime? Utc(DateTime? d) => d is { } v ? DateTime.SpecifyKind(v, DateTimeKind.Utc) : null;
+
+            f.Name = U(_m.Name);
+            f.Status = T(_m.Status);
+            f.AircraftId = _m.AircraftId is { } acId && await db.Aircraft.AnyAsync(a => a.Id == acId && a.UserId == _userId) ? acId : null;
+            f.OffBlock = Utc(_m.OffBlock);
+            f.DepartureTime = Utc(_m.DepartureTime);
+            f.ArrivalTime = Utc(_m.ArrivalTime);
+            f.OnBlock = Utc(_m.OnBlock);
+            f.DepartureAirportId = _m.DepartureAirportId is { } depId && await db.Airports.AnyAsync(a => a.Id == depId) ? depId : null;
+            f.ArrivalAirportId = _m.ArrivalAirportId is { } arrId && await db.Airports.AnyAsync(a => a.Id == arrId) ? arrId : null;
+            // Day/night: calculated from the saved times and airports when possible, else as entered.
+            var depAp = f.DepartureAirportId is { } dId ? await db.Airports.AsNoTracking().FirstOrDefaultAsync(a => a.Id == dId) : null;
+            var arrAp = f.ArrivalAirportId is { } aId ? await db.Airports.AsNoTracking().FirstOrDefaultAsync(a => a.Id == aId) : null;
+            if (!FlightCrewStudio.Services.DayNight.FlightDayNight.Apply(f, depAp, arrAp))
+            {
+                f.TotalDayMinutes = _m.TotalDayMinutes;
+                f.TotalNightMinutes = _m.TotalNightMinutes;
+            }
+            f.TotalInstrMinutes = _m.TotalInstrMinutes;
+            f.RadiationAmount = _m.RadiationAmount;
+            f.NightLanding = _m.NightLanding;
+            f.PilotFlying = _m.PilotFlying;
+            f.Remarks = T(_m.Remarks);
+
+            // Crew: each row is an existing crew member + a role id.
+            var rows = _crew.Where(r => r.CrewMemberId is not null).ToList();
+            if (_crew.Count != rows.Count)
+                throw new InvalidOperationException("Choose a crew member on every crew row (or remove the empty row).");
+            var dup = rows.GroupBy(r => r.CrewMemberId).FirstOrDefault(g => g.Count() > 1);
+            if (dup is not null)
+                throw new InvalidOperationException($"{_members[dup.Key!.Value].DisplayName} is listed more than once.");
+            var ownedIds = (await db.CrewMembers.Where(c => c.UserId == _userId).Select(c => c.Id).ToListAsync()).ToHashSet();
+            var roleIds = (await db.CrewRoles.Select(r => r.Id).ToListAsync()).ToHashSet();
+
+            db.FlightCrew.RemoveRange(f.Crew);
+            f.Crew = rows
+                .Where(r => ownedIds.Contains(r.CrewMemberId!.Value))
+                .Select((r, i) => new FlightCrew
+                {
+                    CrewMemberId = r.CrewMemberId!.Value,
+                    CrewRoleId = r.CrewRoleId is { } rid && roleIds.Contains(rid) ? rid : null,
+                    Position = i
+                })
+                .ToList();
+
+            // My role follows my crew-list entry when I'm on the crew; otherwise the dropdown.
+            var myRoleId = _myCrewMemberId is null ? null : f.Crew.FirstOrDefault(c => c.CrewMemberId == _myCrewMemberId)?.CrewRoleId;
+            f.MyCrewRoleId = myRoleId ?? (_m.MyCrewRoleId is { } m && roleIds.Contains(m) ? m : null);
+
+            f.EditedLocally = true;
+            f.EditedAt = DateTime.UtcNow;
+            f.LastUpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+
+            await LoadAsync();
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex)
+        {
+            _statusOk = false; _status = $"Could not save: {ex.Message}";
+        }
+        finally { _busy = false; }
+    }
+
+    /// <summary>Clear the "edited here" flag so the next sync that covers this flight refreshes it from GlobaLog.</summary>
+    private async Task RevertToSyncAsync()
+    {
+        _busy = true;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var f = await db.Flights.FirstAsync(x => x.Id == Id && x.UserId == _userId);
+            f.EditedLocally = false;
+            f.EditedAt = null;
+            await db.SaveChangesAsync();
+            await LoadAsync();
+            _statusOk = true;
+            _status = "Sync will update this flight next time it covers it (clear the sync date to force it).";
+        }
+        finally { _busy = false; }
+    }
+}

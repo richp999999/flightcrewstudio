@@ -1,0 +1,23 @@
+@* Admin section: sub-menu beside the page, with the page header (title + actions) on the right. *@
+
+<SubMenuLayout Label="Admin">
+    <Menu>
+        <NavLink class="admin-menu-link" href="admin/airports">Airports</NavLink>
+        <NavLink class="admin-menu-link" href="admin/countries">Countries</NavLink>
+        <NavLink class="admin-menu-link" href="admin/regions">Regions</NavLink>
+        <NavLink class="admin-menu-link" href="admin/maintenance">Maintenance</NavLink>
+    </Menu>
+    <ChildContent>
+        <div class="page-head">
+            <h1>@(string.IsNullOrEmpty(Title) ? "Admin" : Title)</h1>
+            @if (Actions is not null) { <div class="actions">@Actions</div> }
+        </div>
+        @ChildContent
+    </ChildContent>
+</SubMenuLayout>
+
+@code {
+    [Parameter] public string? Title { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

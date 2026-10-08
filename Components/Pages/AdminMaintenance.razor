@@ -1,0 +1,58 @@
+@page "/admin/maintenance"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.DayNight
+
+@inject DayNightRecalculator Recalculator
+
+<PageTitle>Maintenance · Admin · FlightCrewStudio</PageTitle>
+
+<AdminShell Title="Maintenance">
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title">Recalculate day / night time</h5>
+            <p class="text-muted small mb-3">
+                Works out the day and night time of every stored flight (all users) from its off-block and
+                on-block times along the great-circle route between its airports — the same calculation used
+                when flights are synced or edited. Run this after importing airport data, or to refresh older flights.
+                Flights whose airports have no position yet are left as they are.
+            </p>
+            <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">@(_busy ? "Recalculating…" : "Recalculate all flights")</button>
+            @if (_busy && _progress is not null) { <span class="small text-muted ms-2">@_progress</span> }
+            @if (_result is not null)
+            {
+                <div class="alert alert-success py-2 mt-3 mb-0">
+                    @_result.Flights.ToString("N0") flights checked: @_result.Updated.ToString("N0") updated, @_result.Unchanged.ToString("N0") already correct@(_result.CannotCalculate > 0 ? $", {_result.CannotCalculate:N0} couldn't be calculated" : "").
+                    @if (_result.MissingAirports.Count > 0)
+                    {
+                        <div class="small mt-1">⚠ No position for: @string.Join(", ", _result.MissingAirports.Take(30))@(_result.MissingAirports.Count > 30 ? " …" : "") — add them under <a href="/admin/airports">Airports</a> or import airport data.</div>
+                    }
+                </div>
+            }
+            @if (_error is not null) { <div class="alert alert-danger py-2 mt-3 mb-0">@_error</div> }
+        </div>
+    </div>
+</AdminShell>
+
+@code {
+    private bool _busy;
+    private string? _progress, _error;
+    private DayNightRecalculator.Result? _result;
+
+    private async Task RunAsync()
+    {
+        _busy = true; _result = null; _error = null; _progress = null;
+        try
+        {
+            _result = await Recalculator.RecalculateAllAsync((done, total) =>
+            {
+                _progress = $"{done:N0} of {total:N0}…";
+                InvokeAsync(StateHasChanged);
+            });
+        }
+        catch (Exception ex) { _error = $"Recalculation failed: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+}

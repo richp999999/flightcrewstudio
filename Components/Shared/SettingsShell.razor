@@ -1,0 +1,15 @@
+@* Settings section: sub-menu (GlobaLog, Aircraft, Crew, Previous Experience) beside the page. Pages keep their own page header. *@
+
+<SubMenuLayout Label="Settings">
+    <Menu>
+        <NavLink class="admin-menu-link" href="settings" Match="NavLinkMatch.All">GlobaLog</NavLink>
+        <NavLink class="admin-menu-link" href="settings/aircraft">Aircraft</NavLink>
+        <NavLink class="admin-menu-link" href="settings/crew">Crew</NavLink>
+        <NavLink class="admin-menu-link" href="settings/previous-experience">Previous Experience</NavLink>
+    </Menu>
+    <ChildContent>@ChildContent</ChildContent>
+</SubMenuLayout>
+
+@code {
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

@@ -1,0 +1,237 @@
+@page "/admin/airports/new"
+@page "/admin/airports/{Id:int}"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using System.Globalization
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Admin
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>@(IsNew ? "Add airport" : _title) · Admin · FlightCrewStudio</PageTitle>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_notFound)
+{
+    <AdminShell Title="Airport not found"><a href="/admin/airports">« Airports</a></AdminShell>
+}
+else
+{
+    <AdminShell Title="@(IsNew ? "Add airport" : _title)">
+    <Actions><a href="/admin/airports">« Airports</a></Actions>
+    <ChildContent>
+    <div class="row g-4">
+        <div class="col-xl-7">
+            <div class="card"><div class="card-body">
+                <h5 class="card-title">Airport</h5>
+                <div class="row g-2">
+                    <div class="col-4">
+                        <label class="form-label small">ICAO / ident</label>
+                        <input class="form-control text-uppercase" maxlength="10" placeholder="EGBB" @bind="_icao" />
+                    </div>
+                    <div class="col-3">
+                        <label class="form-label small">IATA</label>
+                        <input class="form-control text-uppercase" maxlength="3" placeholder="BHX" @bind="_iata" />
+                    </div>
+                    <div class="col-5">
+                        <label class="form-label small">Type</label>
+                        <select class="form-select" @bind="_type">
+                            <option value="">—</option>
+                            @foreach (var t in ReferenceDataImporter.AirportTypes) { <option value="@t">@Airport.TypeLabel(t)</option> }
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Name</label>
+                        <input class="form-control" maxlength="150" placeholder="Birmingham International Airport" @bind="_name" />
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Town / city</label>
+                        <input class="form-control" maxlength="100" placeholder="Birmingham" @bind="_municipality" />
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small">Country</label>
+                        <select class="form-select" value="@_countryId" @onchange="OnCountryChanged">
+                            <option value="">—</option>
+                            @foreach (var c in _countries) { <option value="@c.Id" selected="@(c.Id == _countryId)">@c.Name (@c.Code)</option> }
+                        </select>
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small">Region</label>
+                        <select class="form-select" @bind="RegionIdText" disabled="@(_countryId is null)">
+                            <option value="">—</option>
+                            @foreach (var r in _regions) { <option value="@r.Id">@r.Name (@r.Code)</option> }
+                        </select>
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label small">Latitude</label>
+                        <input class="form-control" placeholder="52.4539" @bind="_lat" />
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label small">Longitude</label>
+                        <input class="form-control" placeholder="-1.748" @bind="_lon" />
+                    </div>
+                    <div class="col-4">
+                        <label class="form-label small">Elevation (ft)</label>
+                        <input class="form-control" placeholder="327" @bind="_elev" />
+                    </div>
+                </div>
+            </div></div>
+        </div>
+
+        @if (!IsNew)
+        {
+            <div class="col-xl-5">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Usage</h5>
+                    <p class="mb-1">Departures: <strong>@_departures</strong></p>
+                    <p class="mb-0">Arrivals: <strong>@_arrivals</strong></p>
+                </div></div>
+            </div>
+        }
+    </div>
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span>
+        }
+        @if (!IsNew)
+        {
+            @if (_departures + _arrivals == 0)
+            {
+                @if (_confirmDelete)
+                {
+                    <span class="me-1">Remove this airport?</span>
+                    <button class="btn btn-danger" @onclick="DeleteAsync" disabled="@_busy">Remove</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Cancel</button>
+                }
+                else
+                {
+                    <button class="btn btn-outline-danger me-auto" @onclick="() => _confirmDelete = true">Remove airport</button>
+                }
+            }
+            else
+            {
+                <span class="small-muted me-auto">Used by @(_departures + _arrivals) flight leg(s) across all users, so it can't be removed.</span>
+            }
+        }
+        <a class="btn btn-outline-secondary" href="/admin/airports">Cancel</a>
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">@(IsNew ? "Add airport" : "Save")</button>
+    </div>
+    </ChildContent>
+    </AdminShell>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+
+    private bool IsNew => Id is null;
+    private bool _loaded, _notFound, _busy, _statusOk, _confirmDelete;
+    private string? _status, _title, _icao, _iata, _name, _municipality, _type, _lat, _lon, _elev;
+    private int? _countryId, _regionId;
+    private int _departures, _arrivals;
+    private List<Country> _countries = new();
+    private List<Region> _regions = new();
+
+    private string RegionIdText
+    {
+        get => _regionId?.ToString() ?? "";
+        set => _regionId = int.TryParse(value, out var v) ? v : null;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _countries = await db.Countries.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+
+        if (!IsNew)
+        {
+            var a = await db.Airports.AsNoTracking().FirstOrDefaultAsync(x => x.Id == Id);
+            if (a is null) { _notFound = true; _loaded = true; return; }
+            (_icao, _iata, _name, _municipality, _type, _title) = (a.Icao, a.Iata, a.Name, a.Municipality, a.Type, a.DisplayName);
+            (_countryId, _regionId) = (a.CountryId, a.RegionId);
+            _lat = a.Latitude?.ToString(CultureInfo.InvariantCulture);
+            _lon = a.Longitude?.ToString(CultureInfo.InvariantCulture);
+            _elev = a.ElevationFt?.ToString(CultureInfo.InvariantCulture);
+            _departures = await db.Flights.CountAsync(f => f.DepartureAirportId == Id);
+            _arrivals = await db.Flights.CountAsync(f => f.ArrivalAirportId == Id);
+        }
+        await LoadRegionsAsync(db);
+        _loaded = true;
+    }
+
+    private async Task LoadRegionsAsync(ApplicationDbContext db) =>
+        _regions = _countryId is null ? new() : await db.Regions.AsNoTracking().Where(r => r.CountryId == _countryId).OrderBy(r => r.Name).ToListAsync();
+
+    private async Task OnCountryChanged(ChangeEventArgs e)
+    {
+        _countryId = int.TryParse(e.Value?.ToString(), out var v) ? v : null;
+        _regionId = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        await LoadRegionsAsync(db);
+    }
+
+    private static string? T(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    private void Fail(string msg) { _statusOk = false; _status = msg; }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            var icao = Airport.NormalizeIcao(_icao);
+            if (icao is null || icao.Length < 3) { Fail("Enter the ICAO code (or OurAirports ident)."); return; }
+            var iata = T(_iata)?.ToUpperInvariant();
+            if (iata is not null && iata.Length != 3) { Fail("IATA codes have 3 letters (or leave it blank)."); return; }
+            double? lat = null, lon = null; int? elev = null;
+            if (T(_lat) is { } la) { if (!double.TryParse(la, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || v is < -90 or > 90) { Fail("Latitude must be between -90 and 90."); return; } lat = v; }
+            if (T(_lon) is { } lo) { if (!double.TryParse(lo, NumberStyles.Float, CultureInfo.InvariantCulture, out var v) || v is < -180 or > 180) { Fail("Longitude must be between -180 and 180."); return; } lon = v; }
+            if (T(_elev) is { } el) { if (!int.TryParse(el, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v)) { Fail("Elevation must be a whole number of feet."); return; } elev = v; }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.Airports.AnyAsync(a => a.Icao == icao && a.Id != (Id ?? 0))) { Fail($"{icao} already exists."); return; }
+
+            Airport ap;
+            if (IsNew) { ap = new Airport(); db.Airports.Add(ap); }
+            else ap = await db.Airports.FirstAsync(a => a.Id == Id);
+
+            ap.Icao = icao; ap.Iata = iata; ap.Name = T(_name); ap.Municipality = T(_municipality);
+            ap.Type = T(_type); ap.Latitude = lat; ap.Longitude = lon; ap.ElevationFt = elev;
+            ap.CountryId = _countryId;
+            ap.RegionId = _regionId is { } rid && await db.Regions.AnyAsync(r => r.Id == rid && r.CountryId == _countryId) ? rid : null;
+            await db.SaveChangesAsync();
+
+            if (IsNew) { Nav.NavigateTo($"/admin/airports/{ap.Id}"); return; }
+            _title = ap.DisplayName; _icao = ap.Icao; _iata = ap.Iata;
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex) { Fail($"Could not save: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var ap = await db.Airports.FirstOrDefaultAsync(a => a.Id == Id);
+            if (ap is null) { Nav.NavigateTo("/admin/airports"); return; }
+            if (await db.Flights.AnyAsync(f => f.DepartureAirportId == Id || f.ArrivalAirportId == Id))
+            { Fail("This airport is used by flights and can't be removed."); _confirmDelete = false; return; }
+            db.Airports.Remove(ap);
+            await db.SaveChangesAsync();
+            Nav.NavigateTo("/admin/airports");
+        }
+        catch (Exception ex) { Fail($"Could not remove: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+}

@@ -1,0 +1,112 @@
+@page "/admin/regions"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Admin
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ReferenceDataImporter Importer
+@inject NavigationManager Nav
+
+<PageTitle>Regions · Admin · FlightCrewStudio</PageTitle>
+
+<AdminShell Title="Regions">
+<Actions>
+    <span class="text-muted">@_total.ToString("N0") regions</span>
+    <a class="btn btn-primary btn-sm text-white" href="/admin/regions/new">+ Add region</a>
+</Actions>
+<ChildContent>
+    <CsvImportPanel Title="Import regions" OnImport="@(csv => Importer.ImportRegionsAsync(csv))" OnImported="ReloadAsync"
+                    Help="Choose an OurAirports regions.csv. Regions are matched on their code (e.g. GB-ENG) and updated in place; nothing is deleted. Import countries first so regions can be linked to them." />
+
+    <div class="row g-2 mb-3 align-items-center">
+        <div class="col-sm-5 col-lg-4">
+            <select class="form-select" value="@CountryCode" @onchange="OnCountryChanged">
+                <option value="">All countries</option>
+                @foreach (var c in _countries) { <option value="@c.Code" selected="@(c.Code == CountryCode)">@c.Name (@c.Code)</option> }
+            </select>
+        </div>
+        <div class="col-sm-5 col-lg-4">
+            <input class="form-control" placeholder="Search code or name" value="@_search" @oninput="OnSearch" />
+        </div>
+        <div class="col-auto small text-muted">@(_rows.Count >= Limit ? $"Showing the first {Limit} — filter or search to narrow." : $"{_rows.Count} shown")</div>
+    </div>
+
+    @if (!_loaded) { <p><em>Loading…</em></p> }
+    else if (_rows.Count == 0) { <div class="alert alert-info">No regions found.@(_total == 0 ? " Import a regions.csv above." : "")</div> }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-hover align-middle table-log">
+                <thead><tr><th>Code</th><th>Local</th><th>Name</th><th>Country</th><th class="num">Airports</th></tr></thead>
+                <tbody>
+                    @foreach (var r in _rows)
+                    {
+                        var id = r.Id;
+                        <tr class="clickable-row" @onclick="@(() => Nav.NavigateTo("/admin/regions/" + id))" title="Open region">
+                            <td class="fw-bold"><a class="text-reset" href="/admin/regions/@id" @onclick:stopPropagation="true">@r.Code</a></td>
+                            <td>@r.LocalCode</td>
+                            <td>@r.Name</td>
+                            <td>@r.Country</td>
+                            <td class="num">@r.Airports.ToString("N0")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</ChildContent>
+</AdminShell>
+
+@code {
+    private const int Limit = 300;
+    [SupplyParameterFromQuery(Name = "country")] private string? CountryCode { get; set; }
+
+    private sealed record Row(int Id, string Code, string? LocalCode, string Name, string? Country, int Airports);
+    private bool _loaded;
+    private int _total;
+    private string _search = "";
+    private List<Country> _countries = new();
+    private List<Row> _rows = new();
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _countries = await db.Countries.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        await ReloadAsync();
+    }
+
+    private async Task OnCountryChanged(ChangeEventArgs e)
+    {
+        CountryCode = string.IsNullOrEmpty(e.Value?.ToString()) ? null : e.Value!.ToString();
+        await ReloadAsync();
+    }
+
+    private async Task OnSearch(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? "";
+        _cts?.Cancel();
+        var cts = _cts = new CancellationTokenSource();
+        try { await Task.Delay(250, cts.Token); await ReloadAsync(); } catch (OperationCanceledException) { }
+    }
+
+    private async Task ReloadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _total = await db.Regions.CountAsync();
+        IQueryable<Region> q = db.Regions.AsNoTracking().Include(r => r.Country);
+        if (!string.IsNullOrEmpty(CountryCode)) q = q.Where(r => r.Country != null && r.Country.Code == CountryCode);
+        var s = _search.Trim();
+        if (s.Length > 0) q = q.Where(r => r.Code.Contains(s) || r.Name.Contains(s));
+        var list = await q.OrderBy(r => r.Code).Take(Limit).ToListAsync();
+        var ids = list.Select(r => r.Id).ToList();
+        var counts = await db.Airports.Where(a => a.RegionId != null && ids.Contains(a.RegionId.Value)).GroupBy(a => a.RegionId!.Value)
+            .Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C);
+        _rows = list.Select(r => new Row(r.Id, r.Code, r.LocalCode, r.Name, r.Country?.Name, counts.GetValueOrDefault(r.Id))).ToList();
+        _loaded = true;
+    }
+}

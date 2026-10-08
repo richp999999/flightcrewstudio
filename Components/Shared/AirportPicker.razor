@@ -1,0 +1,103 @@
+@* Searchable airport field: type an ICAO/IATA code, name or town, then pick from the matches. *@
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<div class="airport-picker">
+    @if (_selected is not null && !_editing)
+    {
+        <div class="form-control d-flex justify-content-between align-items-center picker-selected" @onclick="StartEdit" title="Click to change">
+            <span>@_selected.DisplayName</span>
+            <span class="small text-muted">@(_selected.Country?.Name ?? "")</span>
+        </div>
+    }
+    else
+    {
+        <input class="form-control" placeholder="Type an ICAO/IATA code, airport or town…"
+               value="@_query" @oninput="OnInput" @onblur="OnBlur" @ref="_input" />
+        @if (_results.Count > 0)
+        {
+            <div class="picker-results">
+                @foreach (var a in _results)
+                {
+                    var ap = a;
+                    <button type="button" class="picker-item" @onmousedown="() => SelectAsync(ap)" @onmousedown:preventDefault="true">
+                        <span class="fw-medium">@ap.Icao</span>@(ap.Iata is null ? "" : $" / {ap.Iata}")
+                        <span class="text-muted"> — @(ap.Name ?? ap.Municipality)@(ap.Municipality is not null && ap.Name is not null && !ap.Name.Contains(ap.Municipality) ? $", {ap.Municipality}" : "")@(ap.Country is null ? "" : $" ({ap.Country.Code})")</span>
+                    </button>
+                }
+            </div>
+        }
+        else if (_query.Trim().Length >= 2 && _searched)
+        {
+            <div class="small text-muted mt-1">No airports match "@_query".</div>
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public int? Value { get; set; }
+    [Parameter] public EventCallback<int?> ValueChanged { get; set; }
+
+    private Airport? _selected;
+    private bool _editing, _searched;
+    private string _query = "";
+    private List<Airport> _results = new();
+    private ElementReference _input;
+    private int? _loadedFor;
+    private CancellationTokenSource? _cts;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Value == _loadedFor && (_selected is not null || Value is null)) return;
+        _loadedFor = Value;
+        if (Value is null) { _selected = null; return; }
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _selected = await db.Airports.AsNoTracking().Include(a => a.Country).FirstOrDefaultAsync(a => a.Id == Value);
+    }
+
+    private async Task StartEdit()
+    {
+        _editing = true; _query = ""; _results.Clear(); _searched = false;
+        StateHasChanged();
+        await Task.Yield();
+        try { await _input.FocusAsync(); } catch { /* element not rendered yet */ }
+    }
+
+    private void OnBlur() { if (_selected is not null) _editing = false; _results.Clear(); }
+
+    private async Task OnInput(ChangeEventArgs e)
+    {
+        _query = e.Value?.ToString() ?? "";
+        _cts?.Cancel();
+        var cts = _cts = new CancellationTokenSource();
+        var q = _query.Trim();
+        if (q.Length < 2) { _results.Clear(); _searched = false; return; }
+        try
+        {
+            await Task.Delay(200, cts.Token);   // debounce typing
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var up = q.ToUpperInvariant();
+            var matches = await db.Airports.AsNoTracking().Include(a => a.Country)
+                .Where(a => a.Icao.StartsWith(up) || a.Iata == up
+                            || (a.Name != null && a.Name.Contains(q))
+                            || (a.Municipality != null && a.Municipality.Contains(q)))
+                // Bigger airports first; an exact ICAO/IATA match gets a one-step boost (so "EGBB" or "FAO"
+                // come top, but typing "faro" still prefers Faro Airport over a small strip coded FARO).
+                .OrderBy(a => (a.Type == "large_airport" ? 0 : a.Type == "medium_airport" ? 2 : a.Type == "small_airport" ? 4 : 6)
+                              - (a.Icao == up || a.Iata == up ? 3 : 0))
+                .ThenByDescending(a => a.Iata != null)
+                .ThenBy(a => a.Icao)
+                .Take(15)
+                .ToListAsync(cts.Token);
+            if (!cts.IsCancellationRequested) { _results = matches; _searched = true; }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task SelectAsync(Airport a)
+    {
+        _selected = a; _loadedFor = a.Id; _editing = false; _results.Clear(); _query = "";
+        await ValueChanged.InvokeAsync(a.Id);
+    }
+}

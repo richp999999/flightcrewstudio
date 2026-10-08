@@ -1,0 +1,187 @@
+@page "/settings/aircraft/new"
+@page "/settings/aircraft/{Id:int}"
+@page "/aircraft/new"
+@page "/aircraft/{Id:int}"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>@(IsNew ? "Add aircraft" : _title) · FlightCrewStudio</PageTitle>
+
+<SettingsShell>
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_notFound)
+{
+    <div class="page-head"><h1>Aircraft not found</h1></div>
+    <a href="/settings/aircraft">« Aircraft</a>
+}
+else
+{
+    <div class="page-head">
+        <h1>@(IsNew ? "Add aircraft" : _title)</h1>
+        <div class="actions">
+            <a href="/settings/aircraft">« Aircraft</a>
+            @if (!IsNew && _flightCount > 0) { <a href="/flights?aircraft=@Id">View @_flightCount flights</a> }
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card"><div class="card-body">
+                <h5 class="card-title">Aircraft</h5>
+                <div class="mb-3">
+                    <label class="form-label small">Registration</label>
+                    <input class="form-control text-uppercase" maxlength="20" placeholder="G-ABCD" @bind="_registration" />
+                </div>
+                <div class="mb-1">
+                    <label class="form-label small">Type</label>
+                    <select class="form-select" @bind="_typeIdText">
+                        <option value="">—</option>
+                        @foreach (var t in _types) { <option value="@t.Id">@t.DisplayName</option> }
+                    </select>
+                </div>
+                <div class="form-text"><a href="/settings/aircraft/types/new">+ Add a new type</a> (save this aircraft first if you've made changes)</div>
+            </div></div>
+        </div>
+
+        @if (!IsNew)
+        {
+            <div class="col-lg-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Usage</h5>
+                    <p class="mb-1">Flights: <strong>@_flightCount</strong></p>
+                    <p class="mb-0">Last flown: <strong>@(_lastFlown?.ToString("dd/MM/yyyy") ?? "—")</strong></p>
+                </div></div>
+            </div>
+        }
+    </div>
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span>
+        }
+        @if (!IsNew)
+        {
+            @if (_flightCount == 0)
+            {
+                @if (_confirmDelete)
+                {
+                    <span class="me-1">Remove this aircraft?</span>
+                    <button class="btn btn-danger" @onclick="DeleteAsync" disabled="@_busy">Remove</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Cancel</button>
+                }
+                else
+                {
+                    <button class="btn btn-outline-danger me-auto" @onclick="() => _confirmDelete = true">Remove aircraft</button>
+                }
+            }
+            else
+            {
+                <span class="small-muted me-auto">Linked to @_flightCount flight(s), so it can't be removed.</span>
+            }
+        }
+        <a class="btn btn-outline-secondary" href="/settings/aircraft">Cancel</a>
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">@(IsNew ? "Add aircraft" : "Save")</button>
+    </div>
+}
+</SettingsShell>
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool IsNew => Id is null;
+    private bool _loaded, _notFound, _busy, _statusOk, _confirmDelete;
+    private string? _status, _registration, _title;
+    private string _typeIdText = "";
+    private string _userId = default!;
+    private List<AircraftType> _types = new();
+    private int _flightCount;
+    private DateTime? _lastFlown;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _types = await db.AircraftTypes.AsNoTracking().Where(t => t.UserId == _userId)
+            .OrderBy(t => t.Manufacturer).ThenBy(t => t.Name).ToListAsync();
+
+        if (!IsNew)
+        {
+            var ac = await db.Aircraft.AsNoTracking().FirstOrDefaultAsync(a => a.Id == Id && a.UserId == _userId);
+            if (ac is null) { _notFound = true; _loaded = true; return; }
+            _registration = ac.DisplayRegistration;
+            _title = ac.DisplayRegistration;
+            _typeIdText = ac.AircraftTypeId?.ToString() ?? "";
+            _flightCount = await db.Flights.CountAsync(f => f.AircraftId == Id);
+            _lastFlown = await db.Flights.Where(f => f.AircraftId == Id).MaxAsync(f => f.OffBlock);
+        }
+        _loaded = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            var reg = Aircraft.Normalize(_registration);
+            if (reg is null) { _statusOk = false; _status = "Enter a registration."; return; }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.Aircraft.AnyAsync(a => a.UserId == _userId && a.Registration == reg && a.Id != (Id ?? 0)))
+            { _statusOk = false; _status = $"{new Aircraft { Registration = reg }.DisplayRegistration} already exists."; return; }
+
+            int? typeId = int.TryParse(_typeIdText, out var t) && await db.AircraftTypes.AnyAsync(x => x.Id == t && x.UserId == _userId) ? t : null;
+
+            Aircraft ac;
+            if (IsNew)
+            {
+                ac = new Aircraft { UserId = _userId };
+                db.Aircraft.Add(ac);
+            }
+            else
+            {
+                ac = await db.Aircraft.FirstAsync(a => a.Id == Id && a.UserId == _userId);
+            }
+            ac.Registration = reg;
+            ac.AircraftTypeId = typeId;
+            await db.SaveChangesAsync();
+
+            if (IsNew) { Nav.NavigateTo($"/settings/aircraft/{ac.Id}"); return; }
+            _title = ac.DisplayRegistration;
+            _registration = ac.DisplayRegistration;
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex) { _statusOk = false; _status = $"Could not save: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var ac = await db.Aircraft.FirstOrDefaultAsync(a => a.Id == Id && a.UserId == _userId);
+            if (ac is null) { Nav.NavigateTo("/settings/aircraft"); return; }
+            if (await db.Flights.AnyAsync(f => f.AircraftId == Id))
+            { _statusOk = false; _status = "This aircraft is linked to flights and can't be removed."; _confirmDelete = false; return; }
+            db.Aircraft.Remove(ac);
+            await db.SaveChangesAsync();
+            Nav.NavigateTo("/settings/aircraft");
+        }
+        catch (Exception ex) { _statusOk = false; _status = $"Could not remove: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+}

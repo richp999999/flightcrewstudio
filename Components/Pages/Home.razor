@@ -1,0 +1,208 @@
+@page "/"
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Dashboard · FlightCrewStudio</PageTitle>
+
+<AuthorizeView>
+    <NotAuthorized>
+        <div class="page-head"><h1>FlightCrewStudio</h1></div>
+        <p class="lead">Download your flight log from GlobaLog and keep your own copy.</p>
+        <p>
+            <a class="btn btn-primary" href="/Account/Login">Log in</a>
+            <a class="btn btn-soft ms-1" href="/Account/Register">Register</a>
+        </p>
+    </NotAuthorized>
+    <Authorized>
+        <div class="page-head">
+            <h1>Dashboard</h1>
+        </div>
+
+        @if (!_loaded)
+        {
+            <p><em>Loading…</em></p>
+        }
+        else if (_flights.Count == 0)
+        {
+            <div class="alert alert-info">
+                No flights yet. Add your GlobaLog login in <a href="/settings">Settings</a>, then run a <a href="/sync">Sync</a>.
+            </div>
+        }
+        else
+        {
+            <div class="stat-strip">
+                <div class="stat primary"><div class="value">@Fmt.HmZero(_all.Block)</div><div class="label">Total</div></div>
+                <div class="stat"><div class="value">@Fmt.HmZero(_all.Captain)</div><div class="label">PIC</div></div>
+                <div class="stat"><div class="value">@Fmt.HmZero(_all.CoPilot)</div><div class="label">Co-pilot</div></div>
+                <div class="stat"><div class="value">@Fmt.HmZero(_all.Night)</div><div class="label">Night</div></div>
+                <div class="stat"><div class="value">@Fmt.HmZero(_all.Instr)</div><div class="label">IFR</div></div>
+                <div class="stat"><div class="value">@_all.Flights</div><div class="label">Flights</div></div>
+                <div class="stat"><div class="value">@_all.Radiation.ToString("0")</div><div class="label nocase">µSv</div></div>
+            </div>
+            @if (_hasOpening)
+            {
+                <div class="small-muted mt-n2 mb-3">Totals include your <a href="/settings/previous-experience">previous experience</a>.</div>
+            }
+
+            <div class="row g-5">
+                <div class="col-lg-6">
+                    <h2 class="section-title">Summary</h2>
+                    @foreach (var p in _periods)
+                    {
+                        var pct = p.LimitHours is { } lim ? Math.Min(100, p.Totals.Block / 60.0 / lim * 100) : (double?)null;
+                        <div class="period">
+                            <h6>@p.Label</h6>
+                            <div class="figures">
+                                <div>
+                                    <span class="fig">@Fmt.HmZero(p.Totals.Block)</span><span class="unit">Time @(p.LimitHours is { } l ? $"/ {l}" : "")</span>
+                                    @if (pct is { } v)
+                                    {
+                                        <div class="meter @(v >= 100 ? "over" : v >= 90 ? "warn" : "")" title="@v.ToString("0")% of @p.LimitHours h">
+                                            <span style="width:@(v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%"></span>
+                                        </div>
+                                    }
+                                </div>
+                                <div><span class="fig">@p.Totals.Flights</span><span class="unit">Flights</span></div>
+                                <div><span class="fig">@p.Totals.Radiation.ToString("0")</span><span class="unit nocase">µSv</span></div>
+                            </div>
+                        </div>
+                    }
+                </div>
+
+                <div class="col-lg-6">
+                    <h2 class="section-title">Latest flights</h2>
+                    <table class="table table-sm table-log">
+                        <thead><tr><th>Date</th><th>Flight</th><th>Route</th><th class="num">Time</th></tr></thead>
+                        <tbody>
+                            @foreach (var f in _flights.TakeLast(6).Reverse())
+                            {
+                                <tr>
+                                    <td>@f.OffBlock?.ToString("dd/MM/yyyy")</td>
+                                    <td>@f.Name <span class="text-muted small">@f.Aircraft?.DisplayRegistration</span></td>
+                                    <td>@f.DepartureAirport?.Icao → @f.ArrivalAirport?.Icao</td>
+                                    <td class="num">@Fmt.Hm(Fmt.BlockMinutes(f))</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                    <a href="/flights">View all flights »</a>
+
+                    @if (_topCrew.Count > 0)
+                    {
+                        <h2 class="section-title">Most flown with</h2>
+                        <div class="d-flex flex-wrap gap-3">
+                            @foreach (var c in _topCrew)
+                            {
+                                <a class="d-flex align-items-center gap-2 text-reset" href="/flights?crew=@c.Id">
+                                    <span class="avatar lg" style="background:@Fmt.AvatarColour(c.Id)">@c.Initials</span>
+                                    <span><span class="d-block">@c.Name</span><span class="small-muted">@c.Count flights · @c.Role</span></span>
+                                </a>
+                            }
+                        </div>
+                    }
+                </div>
+            </div>
+        }
+    </Authorized>
+</AuthorizeView>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loaded;
+    private List<Flight> _flights = new();
+    private Totals _all;
+    private List<Period> _periods = new();
+    private List<TopCrew> _topCrew = new();
+
+    private readonly record struct Totals(long Block, long Captain, long CoPilot, long Night, long Instr, int Flights, double Radiation);
+    private bool _hasOpening;
+    private sealed record Period(string Label, Totals Totals, int? LimitHours);
+    private sealed record TopCrew(int Id, string Name, string Initials, string? Role, int Count);
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthState).User;
+        if (user.Identity?.IsAuthenticated != true) { _loaded = true; return; }
+        var userId = user.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _flights = await db.Flights.AsNoTracking()
+            .Include(f => f.Aircraft)
+            .Include(f => f.DepartureAirport)
+            .Include(f => f.ArrivalAirport)
+            .Where(f => f.UserId == userId)
+            .OrderBy(f => f.OffBlock)
+            .ToListAsync();
+
+        var now = DateTime.UtcNow;
+        // All-time totals include the opening balances from Settings → Previous Experience.
+        // (The rolling periods below are recent flying only, so they don't.)
+        var pe = await PreviousExperience.ForUserAsync(db, userId);
+        var flown = Sum(_flights);
+        _all = flown with
+        {
+            Block = flown.Block + pe.TotalMinutes,
+            Captain = flown.Captain + pe.PicMinutes,
+            CoPilot = flown.CoPilot + pe.CoPilotMinutes,
+            Night = flown.Night + pe.NightMinutes,
+            Instr = flown.Instr + pe.IfrMinutes,
+        };
+        _hasOpening = pe.TotalMinutes > 0;
+        // Rolling/calendar windows with the usual UK/EASA flight-time limits where they apply.
+        _periods =
+        [
+            new("28 Days", Sum(_flights.Where(f => f.OffBlock >= now.AddDays(-28))), 100),
+            new("90 Days", Sum(_flights.Where(f => f.OffBlock >= now.AddDays(-90))), null),
+            new("12 Months", Sum(_flights.Where(f => f.OffBlock >= now.AddMonths(-12))), 1000),
+            new($"This Year ({now.Year})", Sum(_flights.Where(f => f.OffBlock >= new DateTime(now.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc))), 900),
+        ];
+
+        var counts = await db.FlightCrew.AsNoTracking()
+            .Where(fc => fc.CrewMember!.UserId == userId)
+            .GroupBy(fc => fc.CrewMemberId)
+            .Select(g => new { Id = g.Key, Count = g.Count() })
+            .OrderByDescending(x => x.Count)
+            .Take(7)
+            .ToListAsync();
+        var ids = counts.Select(x => x.Id).ToList();
+        var members = await db.CrewMembers.AsNoTracking().Include(c => c.LatestCrewRole).Where(c => ids.Contains(c.Id)).ToDictionaryAsync(c => c.Id);
+        var top = counts.Where(x => members.ContainsKey(x.Id)).Select(x =>
+        {
+            var c = members[x.Id];
+            return new { c.Id, c.Name, c.StaffNumber, LatestRole = c.LatestCrewRole?.Name, x.Count };
+        }).ToList();
+        // Leave yourself out: the crew member chosen in Settings, or failing that anyone on (nearly) every flight.
+        var myId = await db.GlobaLogCredentials.AsNoTracking().Where(c => c.UserId == userId).Select(c => c.MyCrewMemberId).FirstOrDefaultAsync();
+        _topCrew = top
+            .Where(c => myId is not null ? c.Id != myId : c.Count < _flights.Count * 0.9)
+            .Take(6)
+            .Select(c =>
+            {
+                var m = new CrewMember { Name = c.Name, StaffNumber = c.StaffNumber };
+                return new TopCrew(c.Id, m.DisplayName, Fmt.Initials(m), c.LatestRole, c.Count);
+            })
+            .ToList();
+
+        _loaded = true;
+    }
+
+    private static Totals Sum(IEnumerable<Flight> fs) => fs.Aggregate(new Totals(), (t, f) =>
+    {
+        var block = Fmt.BlockMinutes(f);
+        return new Totals(
+            t.Block + block,
+            t.Captain + (f.MyCrewRoleId == CrewRole.CaptainId ? block : 0),
+            t.CoPilot + (f.MyCrewRoleId is CrewRole.FirstOfficerId or CrewRole.SecondOfficerId ? block : 0),
+            t.Night + f.TotalNightMinutes,
+            t.Instr + f.TotalInstrMinutes,
+            t.Flights + 1,
+            t.Radiation + (f.RadiationAmount ?? 0));
+    });
+}

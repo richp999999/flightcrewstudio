@@ -1,0 +1,224 @@
+@page "/settings/previous-experience"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Previous Experience · FlightCrewStudio</PageTitle>
+
+<SettingsShell>
+<div class="page-head"><h1>Previous Experience</h1></div>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <p class="text-muted">
+        Flying before the flights stored here. These are added to your all-time totals — the dashboard,
+        the Flights page's brought-forward line and the PDF logbook's “Total From Previous Pages”.
+        Enter times as <span class="mono">HHHH:MM</span> (e.g. 3557:54).
+    </p>
+
+    <div class="opening">
+        <div class="opening-row">
+            <label class="opening-label" for="pe-total">Total Flight Time</label>
+            <div class="opening-fields">
+                @TimeField("pe-total", null, "Total", nameof(PreviousExperience.TotalMinutes))
+            </div>
+        </div>
+        <div class="opening-row">
+            <div class="opening-label">Single Pilot</div>
+            <div class="opening-fields">
+                @TimeField("pe-se", "Single Engine", "S/E", nameof(PreviousExperience.SingleEngineMinutes))
+                @TimeField("pe-me", "Multi Engine", "M/E", nameof(PreviousExperience.MultiEngineMinutes))
+            </div>
+        </div>
+        <div class="opening-row">
+            <label class="opening-label" for="pe-mp">Multi Pilot</label>
+            <div class="opening-fields">
+                @TimeField("pe-mp", null, "Multi Pilot", nameof(PreviousExperience.MultiPilotMinutes))
+            </div>
+        </div>
+        <div class="opening-row">
+            <div class="opening-label">Conditions</div>
+            <div class="opening-fields">
+                @TimeField("pe-night", "Night", "Night", nameof(PreviousExperience.NightMinutes))
+                @TimeField("pe-ifr", "IFR", "IFR", nameof(PreviousExperience.IfrMinutes))
+            </div>
+        </div>
+        <div class="opening-row">
+            <div class="opening-label">Function</div>
+            <div class="opening-fields">
+                @TimeField("pe-pic", "PIC", "PIC", nameof(PreviousExperience.PicMinutes))
+                @TimeField("pe-cop", "Co-Pilot", "Co-Pilot", nameof(PreviousExperience.CoPilotMinutes))
+                @TimeField("pe-dual", "Dual", "Dual", nameof(PreviousExperience.DualMinutes))
+                @TimeField("pe-ins", "Instructor", "Instructor", nameof(PreviousExperience.InstructorMinutes))
+            </div>
+        </div>
+        <div class="opening-row">
+            <label class="opening-label" for="pe-sim">Simulator</label>
+            <div class="opening-fields">
+                @TimeField("pe-sim", null, "Simulator", nameof(PreviousExperience.SimulatorMinutes))
+            </div>
+        </div>
+        <div class="opening-row">
+            <div class="opening-label">Take-offs</div>
+            <div class="opening-fields">
+                @CountField("pe-to-day", "Day", nameof(PreviousExperience.TakeoffsDay))
+                @CountField("pe-to-night", "Night", nameof(PreviousExperience.TakeoffsNight))
+            </div>
+        </div>
+        <div class="opening-row">
+            <div class="opening-label">Landings</div>
+            <div class="opening-fields">
+                @CountField("pe-ldg-day", "Day", nameof(PreviousExperience.LandingsDay))
+                @CountField("pe-ldg-night", "Night", nameof(PreviousExperience.LandingsNight))
+            </div>
+        </div>
+        <div class="opening-row">
+            <label class="opening-label" for="pe-app">Instrument Approaches</label>
+            <div class="opening-fields">
+                @CountField("pe-app", null, nameof(PreviousExperience.InstrumentApproaches), "Approach")
+            </div>
+        </div>
+    </div>
+
+    @foreach (var w in Warnings())
+    {
+        <div class="text-warning small mb-1">⚠ @w</div>
+    }
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status))
+        {
+            <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span>
+        }
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">Save</button>
+    </div>
+}
+</SettingsShell>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private static readonly string[] TimeFields =
+    [
+        nameof(PreviousExperience.TotalMinutes), nameof(PreviousExperience.SingleEngineMinutes), nameof(PreviousExperience.MultiEngineMinutes),
+        nameof(PreviousExperience.MultiPilotMinutes), nameof(PreviousExperience.NightMinutes), nameof(PreviousExperience.IfrMinutes),
+        nameof(PreviousExperience.PicMinutes), nameof(PreviousExperience.CoPilotMinutes), nameof(PreviousExperience.DualMinutes),
+        nameof(PreviousExperience.InstructorMinutes), nameof(PreviousExperience.SimulatorMinutes),
+    ];
+    private static readonly string[] CountFields =
+    [
+        nameof(PreviousExperience.TakeoffsDay), nameof(PreviousExperience.TakeoffsNight), nameof(PreviousExperience.LandingsDay),
+        nameof(PreviousExperience.LandingsNight), nameof(PreviousExperience.InstrumentApproaches),
+    ];
+
+    private string _userId = default!;
+    private bool _loaded, _busy, _statusOk;
+    private string? _status;
+
+    /// <summary>What's in each box, keyed by property name (times as "h:mm", counts as digits).</summary>
+    private readonly Dictionary<string, string?> _text = new();
+    private readonly HashSet<string> _invalid = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var pe = await PreviousExperience.ForUserAsync(db, _userId);
+        foreach (var f in TimeFields) _text[f] = Fmt.Hm(Get(pe, f));
+        foreach (var f in CountFields) _text[f] = Get(pe, f) is > 0 and var n ? n.ToString() : null;
+        _loaded = true;
+    }
+
+    private RenderFragment TimeField(string id, string? label, string placeholder, string field) => __builder =>
+    {
+        <div class="opening-field">
+            @if (label is not null) { <label class="opening-sub" for="@id">@label</label> }
+            <input id="@id" class="form-control @(_invalid.Contains(field) ? "is-invalid" : "")" inputmode="numeric" autocomplete="off"
+                   placeholder="@placeholder" maxlength="8" title="Hours and minutes, HHHH:MM"
+                   value="@_text[field]" @onchange="e => SetTime(field, e.Value?.ToString())" />
+            @if (_invalid.Contains(field)) { <div class="invalid-feedback">Use HHHH:MM</div> }
+        </div>
+    };
+
+    private RenderFragment CountField(string id, string? label, string field, string? placeholder = null) => __builder =>
+    {
+        <div class="opening-field">
+            @if (label is not null) { <label class="opening-sub" for="@id">@label</label> }
+            <input id="@id" class="form-control @(_invalid.Contains(field) ? "is-invalid" : "")" type="number" min="0" step="1"
+                   placeholder="@(placeholder ?? label)" value="@_text[field]" @onchange="e => SetCount(field, e.Value?.ToString())" />
+        </div>
+    };
+
+    private void SetTime(string field, string? value)
+    {
+        _status = null;
+        var minutes = Fmt.ParseHm(value);
+        if (minutes is null) { _text[field] = value; _invalid.Add(field); return; }
+        _invalid.Remove(field);
+        _text[field] = Fmt.Hm(minutes.Value);   // tidy: "3557" → "3557:00", "0:00" → blank
+    }
+
+    private void SetCount(string field, string? value)
+    {
+        _status = null;
+        _text[field] = value;
+        if (string.IsNullOrWhiteSpace(value) || (int.TryParse(value, out var n) && n >= 0)) _invalid.Remove(field);
+        else _invalid.Add(field);
+    }
+
+    private int Minutes(string field) => Fmt.ParseHm(_text[field]) ?? 0;
+
+    /// <summary>Gentle sanity checks — they don't stop a save.</summary>
+    private IEnumerable<string> Warnings()
+    {
+        var total = Minutes(nameof(PreviousExperience.TotalMinutes));
+        var function = Minutes(nameof(PreviousExperience.PicMinutes)) + Minutes(nameof(PreviousExperience.CoPilotMinutes))
+                       + Minutes(nameof(PreviousExperience.DualMinutes));
+        if (function > total)
+            yield return $"PIC + Co-Pilot + Dual ({Fmt.HmZero(function)}) is more than the Total Flight Time ({Fmt.HmZero(total)}).";
+        var pilot = Minutes(nameof(PreviousExperience.SingleEngineMinutes)) + Minutes(nameof(PreviousExperience.MultiEngineMinutes))
+                    + Minutes(nameof(PreviousExperience.MultiPilotMinutes));
+        if (pilot > total)
+            yield return $"Single-pilot + Multi-pilot ({Fmt.HmZero(pilot)}) is more than the Total Flight Time ({Fmt.HmZero(total)}).";
+        foreach (var f in new[] { nameof(PreviousExperience.NightMinutes), nameof(PreviousExperience.IfrMinutes) })
+            if (Minutes(f) > total)
+                yield return $"{(f == nameof(PreviousExperience.NightMinutes) ? "Night" : "IFR")} is more than the Total Flight Time.";
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            if (_invalid.Count > 0) { _statusOk = false; _status = "Fix the highlighted boxes first."; return; }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var pe = await db.PreviousExperience.FirstOrDefaultAsync(p => p.UserId == _userId);
+            if (pe is null)
+            {
+                pe = new PreviousExperience { UserId = _userId };
+                db.PreviousExperience.Add(pe);
+            }
+            foreach (var f in TimeFields) Set(pe, f, Minutes(f));
+            foreach (var f in CountFields) Set(pe, f, int.TryParse(_text[f], out var n) ? n : 0);
+            pe.UpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync();
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex) { _statusOk = false; _status = $"Could not save: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private static int Get(PreviousExperience pe, string field) => (int)typeof(PreviousExperience).GetProperty(field)!.GetValue(pe)!;
+    private static void Set(PreviousExperience pe, string field, int value) => typeof(PreviousExperience).GetProperty(field)!.SetValue(pe, value);
+}

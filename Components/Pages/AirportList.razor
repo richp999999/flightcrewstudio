@@ -1,0 +1,151 @@
+@page "/admin/airports"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Admin
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ReferenceDataImporter Importer
+@inject NavigationManager Nav
+
+<PageTitle>Airports · Admin · FlightCrewStudio</PageTitle>
+
+<AdminShell Title="Airports">
+<Actions>
+    <span class="text-muted">@_total.ToString("N0") airports</span>
+    <a class="btn btn-primary btn-sm text-white" href="/admin/airports/new">+ Add airport</a>
+</Actions>
+<ChildContent>
+    <CsvImportPanel Title="Import airports" OnImport="ImportAsync" OnImported="ReloadAsync" Progress="@_progress"
+                    Help="Choose an OurAirports airports.csv. Airports are matched on their ident (ICAO) code and updated in place; nothing is deleted. Import countries and regions first so airports can be linked to them.">
+        <div class="mt-2 small">
+            <span class="me-2 text-muted">Types to import:</span>
+            @foreach (var t in ReferenceDataImporter.AirportTypes)
+            {
+                var type = t;
+                <label class="form-check form-check-inline mb-0">
+                    <input class="form-check-input" type="checkbox" checked="@_types.Contains(type)"
+                           @onchange="@(e => { if ((bool)e.Value!) _types.Add(type); else _types.Remove(type); })" />
+                    <span class="form-check-label">@Airport.TypeLabel(type)</span>
+                </label>
+            }
+        </div>
+    </CsvImportPanel>
+
+    <div class="row g-2 mb-3 align-items-center">
+        <div class="col-sm-6 col-lg-5">
+            <input class="form-control" placeholder="Search ICAO, IATA, name, town or country" value="@_search" @oninput="OnSearch" />
+        </div>
+        <div class="col-auto small text-muted">
+            @if (string.IsNullOrWhiteSpace(_search)) { <span>Showing airports used by flights. Search to find any airport.</span> }
+            else if (_rows.Count >= Limit) { <span>Showing the first @Limit matches — refine your search.</span> }
+            else { <span>@_rows.Count match(es).</span> }
+        </div>
+    </div>
+
+    @if (!_loaded)
+    {
+        <p><em>Loading…</em></p>
+    }
+    else if (_rows.Count == 0)
+    {
+        <div class="alert alert-info">@(string.IsNullOrWhiteSpace(_search) ? "No airports are used by flights yet." : "No airports match your search.")</div>
+    }
+    else
+    {
+        <div class="table-responsive">
+            <table class="table table-hover align-middle table-log">
+                <thead>
+                    <tr>
+                        <th>ICAO</th><th>IATA</th><th>Name</th><th>Town</th><th>Country</th><th>Type</th>
+                        <th class="num">Dep</th><th class="num">Arr</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _rows)
+                    {
+                        var id = r.Id;
+                        <tr class="clickable-row" @onclick="@(() => Nav.NavigateTo("/admin/airports/" + id))" title="Open airport">
+                            <td class="fw-bold"><a class="text-reset" href="/admin/airports/@id" @onclick:stopPropagation="true">@r.Icao</a></td>
+                            <td>@if (r.Iata is not null) { <span class="badge badge-soft">@r.Iata</span> }</td>
+                            <td>@r.Name</td>
+                            <td>@r.Town</td>
+                            <td>@r.Country</td>
+                            <td class="small text-muted">@Airport.TypeLabel(r.Type)</td>
+                            <td class="num">@r.Departures</td>
+                            <td class="num">@r.Arrivals</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</ChildContent>
+</AdminShell>
+
+@code {
+    private const int Limit = 200;
+    private sealed record Row(int Id, string Icao, string? Iata, string? Name, string? Town, string? Country, string? Type, int Departures, int Arrivals);
+
+    private bool _loaded;
+    private int _total;
+    private string _search = "";
+    private string? _progress;
+    private List<Row> _rows = new();
+    private readonly HashSet<string> _types = ["large_airport", "medium_airport"];
+    private CancellationTokenSource? _cts;
+
+    protected override Task OnInitializedAsync() => ReloadAsync();
+
+    private async Task OnSearch(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString() ?? "";
+        _cts?.Cancel();
+        var cts = _cts = new CancellationTokenSource();
+        try { await Task.Delay(250, cts.Token); await ReloadAsync(); } catch (OperationCanceledException) { }
+    }
+
+    private async Task ReloadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _total = await db.Airports.CountAsync();
+
+        var deps = await db.Flights.AsNoTracking().Where(f => f.DepartureAirportId != null).GroupBy(f => f.DepartureAirportId!.Value)
+            .Select(g => new { Id = g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Id, x => x.Count);
+        var arrs = await db.Flights.AsNoTracking().Where(f => f.ArrivalAirportId != null).GroupBy(f => f.ArrivalAirportId!.Value)
+            .Select(g => new { Id = g.Key, Count = g.Count() }).ToDictionaryAsync(x => x.Id, x => x.Count);
+
+        IQueryable<Airport> q = db.Airports.AsNoTracking().Include(a => a.Country);
+        var s = _search.Trim();
+        if (s.Length == 0)
+        {
+            var used = deps.Keys.Concat(arrs.Keys).Distinct().ToList();
+            q = q.Where(a => used.Contains(a.Id));
+        }
+        else
+        {
+            var up = s.ToUpperInvariant();
+            q = q.Where(a => a.Icao.StartsWith(up) || a.Iata == up || (a.Name != null && a.Name.Contains(s))
+                             || (a.Municipality != null && a.Municipality.Contains(s)) || (a.Country != null && a.Country.Name.Contains(s)));
+        }
+        var list = await q.OrderBy(a => a.Icao).Take(Limit).ToListAsync();
+        _rows = list
+            .Select(a => new Row(a.Id, a.Icao, a.Iata, a.Name, a.Municipality, a.Country?.Name, a.Type, deps.GetValueOrDefault(a.Id), arrs.GetValueOrDefault(a.Id)))
+            .OrderByDescending(r => r.Departures + r.Arrivals).ThenBy(r => r.Icao)
+            .ToList();
+        _loaded = true;
+    }
+
+    private Task<ImportResult> ImportAsync(string csv)
+    {
+        if (_types.Count == 0) throw new InvalidOperationException("Tick at least one airport type to import.");
+        return Importer.ImportAirportsAsync(csv, _types, (done, total) =>
+        {
+            _progress = $"Imported {done:N0} of {total:N0} airports…";
+            InvokeAsync(StateHasChanged);
+        });
+    }
+}

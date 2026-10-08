@@ -1,0 +1,73 @@
+@implements IDisposable
+
+@inject NavigationManager NavigationManager
+
+<header class="topbar">
+    <div class="container-xl px-3 px-md-4 topbar-inner">
+        <a class="brand" href="">
+            <span class="brand-a">FLIGHTCREW</span><span class="brand-dot">.</span><span class="brand-b">STUDIO</span>
+        </a>
+
+        <input type="checkbox" id="nav-toggle" class="nav-toggle" title="Navigation menu" />
+        <label for="nav-toggle" class="nav-toggle-btn" aria-label="Menu"><span></span><span></span><span></span></label>
+
+        <nav class="nav-links" onclick="document.getElementById('nav-toggle').checked=false">
+            <AuthorizeView>
+                <Authorized>
+                    <NavLink class="nav-link" href="" Match="NavLinkMatch.All">Dashboard</NavLink>
+                    <NavLink class="nav-link" href="flights">Flights</NavLink>
+                    <NavLink class="nav-link" href="sync">Sync</NavLink>
+                    <NavLink class="nav-link" href="export">Export</NavLink>
+
+                    <details class="user-menu">
+                        <summary class="nav-link @(InUserMenuArea ? "active" : "")">@context.User.Identity?.Name</summary>
+                        <div class="user-menu-list" onclick="this.closest('details').open = false">
+                            <a href="settings">Settings</a>
+                            <AuthorizeView Policy="Admin" Context="adminContext">
+                                <a href="admin">Admin</a>
+                            </AuthorizeView>
+                            <div class="user-menu-divider"></div>
+                            <a href="Account/Manage">Account</a>
+                            <form action="Account/Logout" method="post">
+                                <AntiforgeryToken />
+                                <input type="hidden" name="ReturnUrl" value="@currentUrl" />
+                                <button type="submit">Log out</button>
+                            </form>
+                        </div>
+                    </details>
+                </Authorized>
+                <NotAuthorized>
+                    <NavLink class="nav-link" href="Account/Login">Log in</NavLink>
+                    <NavLink class="nav-link" href="Account/Register">Register</NavLink>
+                </NotAuthorized>
+            </AuthorizeView>
+        </nav>
+    </div>
+</header>
+
+@code {
+    private string? currentUrl;
+
+    /// <summary>Underline the user menu when on one of the pages it leads to.</summary>
+    private bool InUserMenuArea =>
+        currentUrl is { } u && (u.StartsWith("settings", StringComparison.OrdinalIgnoreCase)
+                                || u.StartsWith("admin", StringComparison.OrdinalIgnoreCase)
+                                || u.StartsWith("Account/Manage", StringComparison.OrdinalIgnoreCase));
+
+    protected override void OnInitialized()
+    {
+        currentUrl = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        currentUrl = NavigationManager.ToBaseRelativePath(e.Location);
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        NavigationManager.LocationChanged -= OnLocationChanged;
+    }
+}

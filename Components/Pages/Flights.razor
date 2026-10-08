@@ -1,0 +1,292 @@
+@page "/flights"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>Flights</PageTitle>
+
+<div class="page-head">
+    <h1>Flights</h1>
+</div>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_all.Count == 0 && _crewFilter is null && _aircraftFilter is null)
+{
+    <div class="alert alert-info">
+        No flights stored yet. Add your GlobaLog credentials in
+        <a href="/settings">Settings</a>, then run a <a href="/sync">Sync</a>.
+    </div>
+}
+else
+{
+    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+        <div class="d-flex flex-wrap align-items-center gap-2">
+            @if (_crewFilter is not null || _aircraftFilter is not null)
+            {
+                @if (_crewFilter is not null) { <span class="btn btn-soft btn-sm">Flights with @_crewFilter.DisplayName</span> }
+                @if (_aircraftFilter is not null) { <span class="btn btn-soft btn-sm">Flights on @_aircraftFilter.DisplayRegistration</span> }
+                <a class="btn btn-outline-secondary btn-sm" href="/flights">All Flights</a>
+            }
+            else
+            {
+                <span class="btn btn-outline-secondary btn-sm disabled">All Flights</span>
+            }
+            <span class="text-muted small ms-1">@_all.Count flights</span>
+        </div>
+
+        <nav aria-label="Pages">
+            <ul class="pagination mb-0 align-items-center">
+                <li class="page-item me-2 small text-muted">Page</li>
+                <li class="page-item @(_page <= 1 ? "disabled" : "")"><button class="page-link" @onclick="() => GoTo(_page - 1)">«</button></li>
+                @foreach (var p in PageNumbers())
+                {
+                    if (p == 0)
+                    {
+                        <li class="page-item disabled"><span class="page-link">…</span></li>
+                    }
+                    else
+                    {
+                        var n = p;
+                        <li class="page-item @(n == _page ? "active" : "")"><button class="page-link" @onclick="() => GoTo(n)">@n</button></li>
+                    }
+                }
+                <li class="page-item @(_page >= _totalPages ? "disabled" : "")"><button class="page-link" @onclick="() => GoTo(_page + 1)">»</button></li>
+            </ul>
+        </nav>
+    </div>
+
+    <div class="scroll-x">
+        <div class="log-list">
+            <div class="log-row head">
+                <div>Date</div>
+                <div>Aircraft</div>
+                <div>People</div>
+                <div>Departure</div>
+                <div>Arrival</div>
+                <div class="text-center">Time</div>
+                <div>Columns</div>
+                <div class="text-end">Radiation</div>
+            </div>
+
+            @foreach (var f in _pageFlights)
+            {
+                var flightDeck = f.Crew.Where(c => c.CrewRole?.IsFlightDeck == true).OrderBy(c => c.Position).ToList();
+                var others = f.Crew.Where(c => c.CrewRole?.IsFlightDeck != true).OrderBy(c => c.Position).ToList();
+                <div class="log-row clickable" @onclick="@(() => Nav.NavigateTo("/flights/" + f.Id))" title="Open flight">
+                    <div>
+                        <a href="/flights/@f.Id" class="text-reset" @onclick:stopPropagation="true">@(f.OffBlock?.ToString("dd/MM/yyyy") ?? "—")</a>
+                        @if (f.EditedLocally) { <span class="badge badge-outline badge-tiny ms-1" title="Edited here; sync leaves it alone">edited</span> }
+                        <br />
+                        <span class="small-muted">@f.OffBlock?.ToString("ddd") · @f.Name</span>
+                    </div>
+                    <div>
+                        <a class="reg text-reset" href="/flights?aircraft=@f.AircraftId" @onclick:stopPropagation="true">@f.Aircraft?.DisplayRegistration</a>
+                        @if (f.Aircraft?.AircraftType is { } acType)
+                        {
+                            <span class="badge badge-soft ms-1" title="@acType.Manufacturer">@acType.Name</span>
+                        }
+                    </div>
+                    <div>
+                        @foreach (var c in flightDeck)
+                        {
+                            <a class="person" href="/flights?crew=@c.CrewMemberId" @onclick:stopPropagation="true" title="@c.CrewRole?.Name: @c.CrewMember?.DisplayName">
+                                <span class="avatar" style="background:@Fmt.AvatarColour(c.CrewMemberId)">@Fmt.Initials(c.CrewMember)</span>
+                                <span class="badge badge-grey badge-tiny">@c.CrewRole?.Short</span>
+                            </a>
+                        }
+                        @if (others.Count > 0)
+                        {
+                            <details class="d-inline-block align-top" @onclick:stopPropagation="true">
+                                <summary>+@others.Count</summary>
+                                <div class="crew-more">
+                                    @foreach (var c in others)
+                                    {
+                                        <div><span class="text-muted">@c.CrewRole?.Short</span> <a href="/flights?crew=@c.CrewMemberId">@c.CrewMember?.DisplayName</a></div>
+                                    }
+                                </div>
+                            </details>
+                        }
+                    </div>
+                    <div>
+                        <div class="airport"><span class="code">@(f.DepartureAirport?.Icao ?? "???")</span><span>@f.OffBlock?.ToString("HH:mm")</span></div>
+                        <div class="place">@f.DepartureAirport?.Place @if (f.DepartureAirport?.Iata is { } depIata) { <span class="badge badge-soft badge-tiny ms-1">@depIata</span> }</div>
+                    </div>
+                    <div>
+                        <div class="airport"><span class="code">@(f.ArrivalAirport?.Icao ?? "???")</span><span>@f.OnBlock?.ToString("HH:mm")</span></div>
+                        <div class="place">@f.ArrivalAirport?.Place @if (f.ArrivalAirport?.Iata is { } arrIata) { <span class="badge badge-soft badge-tiny ms-1">@arrIata</span> }</div>
+                    </div>
+                    <div class="block">@Fmt.Hm(Fmt.BlockMinutes(f))</div>
+                    <div class="tags">
+                        @if (f.MyCrewRole is not null) { <span class="badge badge-role">@f.MyCrewRole.Name</span> }
+                        @if (f.TotalInstrMinutes > 0) { <span class="badge badge-grey">IFR</span> }
+                        @if (f.TotalNightMinutes > 0) { <span class="badge badge-outline" title="Night time">Night @Fmt.Hm(f.TotalNightMinutes)</span> }
+                        @if (f.NightLanding) { <span class="badge badge-outline">Night ldg</span> }
+                        @if (f.PilotFlying == true) { <span class="badge badge-info">PF</span> }
+                    </div>
+                    <div class="text-end">@(f.RadiationAmount is { } r ? $"{r:0.#} µSv" : "—")</div>
+                </div>
+            }
+        </div>
+    </div>
+
+    <div class="table-responsive mt-4">
+        <table class="table table-bordered table-sm table-log">
+            <thead>
+                <tr>
+                    <th>Totals</th>
+                    <th class="num">Block</th>
+                    <th class="num">Day</th>
+                    <th class="num">Night</th>
+                    <th class="num">IFR</th>
+                    <th class="num">Flights</th>
+                    <th class="num">Radiation (µSv)</th>
+                </tr>
+            </thead>
+            <tbody>
+                @TotalsRow("Brought Forward", _broughtForward)
+                @TotalsRow("This Page", _thisPage)
+                @TotalsRow("Carried Forward", _broughtForward + _thisPage)
+            </tbody>
+        </table>
+        @if (_opening.Block > 0)
+        {
+            <div class="small-muted">Brought Forward includes your <a href="/settings/previous-experience">previous experience</a> (@Fmt.HmZero(_opening.Block)).</div>
+        }
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    /// <summary>Optional crew-member id: show only flights this person was on.</summary>
+    [SupplyParameterFromQuery(Name = "crew")] private int? CrewId { get; set; }
+
+    private const int PageSize = 25;
+    private bool _loaded;
+    private string _userId = default!;
+    private CrewMember? _crewFilter;
+
+    /// <summary>Optional aircraft id: show only flights on this aircraft.</summary>
+    [SupplyParameterFromQuery(Name = "aircraft")] private int? AircraftFilterId { get; set; }
+    private Aircraft? _aircraftFilter;
+
+    // Light projection of every flight (oldest first) for paging and running totals.
+    private List<FlightSummary> _all = new();
+    private List<Flight> _pageFlights = new();
+    private int _page = 1;
+    private int _totalPages = 1;
+    private Totals _broughtForward, _thisPage;
+
+    /// <summary>Previous experience — part of the brought-forward totals, except when filtering by crew or aircraft.</summary>
+    private Totals _opening;
+
+    private sealed record FlightSummary(int Id, DateTime? OffBlock, DateTime? OnBlock, int Day, int Night, int Instr, double? Radiation);
+
+    private readonly record struct Totals(long Block, long Day, long Night, long Instr, int Flights, double Radiation)
+    {
+        public static Totals operator +(Totals a, Totals b) =>
+            new(a.Block + b.Block, a.Day + b.Day, a.Night + b.Night, a.Instr + b.Instr, a.Flights + b.Flights, a.Radiation + b.Radiation);
+
+        public static Totals Of(IEnumerable<FlightSummary> fs) => fs.Aggregate(new Totals(), (t, f) => t + new Totals(
+            f.OffBlock is { } a && f.OnBlock is { } b && b > a ? (long)Math.Round((b - a).TotalMinutes) : 0,
+            f.Day, f.Night, f.Instr, 1, f.Radiation ?? 0));
+    }
+
+    private RenderFragment TotalsRow(string label, Totals t) => @<tr>
+        <td>@label</td>
+        <td class="num">@Fmt.HmZero(t.Block)</td>
+        <td class="num">@Fmt.HmZero(t.Day)</td>
+        <td class="num">@Fmt.HmZero(t.Night)</td>
+        <td class="num">@Fmt.HmZero(t.Instr)</td>
+        <td class="num">@t.Flights</td>
+        <td class="num">@t.Radiation.ToString("0.#")</td>
+    </tr>;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _userId ??= (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var query = db.Flights.AsNoTracking().Where(f => f.UserId == _userId);
+
+        _crewFilter = CrewId is null ? null
+            : await db.CrewMembers.AsNoTracking().FirstOrDefaultAsync(c => c.Id == CrewId && c.UserId == _userId);
+        if (_crewFilter is not null)
+            query = query.Where(f => f.Crew.Any(c => c.CrewMemberId == _crewFilter.Id));
+
+        _aircraftFilter = AircraftFilterId is null ? null
+            : await db.Aircraft.AsNoTracking().FirstOrDefaultAsync(a => a.Id == AircraftFilterId && a.UserId == _userId);
+        if (_aircraftFilter is not null)
+            query = query.Where(f => f.AircraftId == _aircraftFilter.Id);
+
+        var pe = await PreviousExperience.ForUserAsync(db, _userId);
+        _opening = _crewFilter is null && _aircraftFilter is null
+            ? new Totals(pe.TotalMinutes, pe.DayMinutes, pe.NightMinutes, pe.IfrMinutes, 0, 0)
+            : default;
+
+        _all = await query
+            .OrderBy(f => f.OffBlock).ThenBy(f => f.Id)
+            .Select(f => new FlightSummary(f.Id, f.OffBlock, f.OnBlock, f.TotalDayMinutes, f.TotalNightMinutes, f.TotalInstrMinutes, f.RadiationAmount))
+            .ToListAsync();
+
+        _totalPages = Math.Max(1, (int)Math.Ceiling(_all.Count / (double)PageSize));
+        _page = _totalPages; // like a paper logbook: open at the latest page
+        await LoadPageAsync();
+        _loaded = true;
+    }
+
+    private async Task GoTo(int page)
+    {
+        page = Math.Clamp(page, 1, _totalPages);
+        if (page == _page) return;
+        _page = page;
+        await LoadPageAsync();
+    }
+
+    private async Task LoadPageAsync()
+    {
+        var skip = (_page - 1) * PageSize;
+        var ids = _all.Skip(skip).Take(PageSize).Select(f => f.Id).ToList();
+        _broughtForward = _opening + Totals.Of(_all.Take(skip));
+        _thisPage = Totals.Of(_all.Skip(skip).Take(PageSize));
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _pageFlights = (await db.Flights.AsNoTracking()
+                .Where(f => ids.Contains(f.Id))
+                .Include(f => f.Crew).ThenInclude(c => c.CrewMember)
+                .Include(f => f.Crew).ThenInclude(c => c.CrewRole)
+                .Include(f => f.MyCrewRole)
+                .Include(f => f.Aircraft).ThenInclude(a => a!.AircraftType)
+                .Include(f => f.DepartureAirport)
+                .Include(f => f.ArrivalAirport)
+                .AsSplitQuery()
+                .ToListAsync())
+            .OrderBy(f => ids.IndexOf(f.Id))
+            .ToList();
+    }
+
+    /// <summary>1 … (p-2) (p-1) p (p+1) (p+2) … last; 0 marks a gap.</summary>
+    private IEnumerable<int> PageNumbers()
+    {
+        var set = new SortedSet<int> { 1, _totalPages };
+        for (var i = _page - 2; i <= _page + 2; i++)
+            if (i >= 1 && i <= _totalPages) set.Add(i);
+        var prev = 0;
+        foreach (var p in set)
+        {
+            if (prev != 0 && p > prev + 1) yield return 0;
+            yield return p;
+            prev = p;
+        }
+    }
+}

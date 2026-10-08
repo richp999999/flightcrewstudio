@@ -1,0 +1,17 @@
+@inherits LayoutComponentBase
+
+<NavMenu />
+
+<main class="container-xl px-3 px-md-4 py-4">
+    @Body
+</main>
+
+<footer class="container-xl px-3 px-md-4 pb-4 site-footer">
+    <span>FlightCrewStudio</span><span>Data from GlobaLog</span><span>© @DateTime.UtcNow.Year</span>
+</footer>
+
+<div id="blazor-error-ui" data-nosnippet>
+    An unhandled error has occurred.
+    <a href="." class="reload">Reload</a>
+    <span class="dismiss">🗙</span>
+</div>

@@ -1,0 +1,169 @@
+@page "/admin/regions/new"
+@page "/admin/regions/{Id:int}"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>@(IsNew ? "Add region" : _title) · Admin · FlightCrewStudio</PageTitle>
+
+@if (!_loaded) { <p><em>Loading…</em></p> }
+else if (_notFound) { <AdminShell Title="Region not found"><a href="/admin/regions">« Regions</a></AdminShell> }
+else
+{
+    <AdminShell Title="@(IsNew ? "Add region" : _title)">
+    <Actions><a href="/admin/regions">« Regions</a></Actions>
+    <ChildContent>
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card"><div class="card-body">
+                <h5 class="card-title">Region</h5>
+                <div class="row g-2">
+                    <div class="col-6">
+                        <label class="form-label small">Code</label>
+                        <input class="form-control text-uppercase" maxlength="10" placeholder="GB-ENG" @bind="_code" />
+                    </div>
+                    <div class="col-6">
+                        <label class="form-label small">Local code</label>
+                        <input class="form-control text-uppercase" maxlength="10" placeholder="ENG" @bind="_local" />
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Name</label>
+                        <input class="form-control" maxlength="100" placeholder="England" @bind="_name" />
+                    </div>
+                    <div class="col-7">
+                        <label class="form-label small">Country</label>
+                        <select class="form-select" @bind="CountryIdText">
+                            <option value="">—</option>
+                            @foreach (var c in _countries) { <option value="@c.Id">@c.Name (@c.Code)</option> }
+                        </select>
+                    </div>
+                    <div class="col-5">
+                        <label class="form-label small">Continent</label>
+                        <select class="form-select" @bind="_continent">
+                            <option value="">—</option>
+                            @foreach (var c in Continents.All) { <option value="@c.Code">@c.Name</option> }
+                        </select>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Wikipedia link</label>
+                        <input class="form-control" maxlength="255" @bind="_wiki" />
+                    </div>
+                </div>
+            </div></div>
+        </div>
+        @if (!IsNew)
+        {
+            <div class="col-lg-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Usage</h5>
+                    <p class="mb-0">Airports: <strong>@_airports.ToString("N0")</strong></p>
+                </div></div>
+            </div>
+        }
+    </div>
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status)) { <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span> }
+        @if (!IsNew)
+        {
+            @if (_airports == 0)
+            {
+                @if (_confirmDelete)
+                {
+                    <span class="me-1">Remove this region?</span>
+                    <button class="btn btn-danger" @onclick="DeleteAsync" disabled="@_busy">Remove</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Cancel</button>
+                }
+                else { <button class="btn btn-outline-danger me-auto" @onclick="() => _confirmDelete = true">Remove region</button> }
+            }
+            else { <span class="small-muted me-auto">Has airports, so it can't be removed.</span> }
+        }
+        <a class="btn btn-outline-secondary" href="/admin/regions">Cancel</a>
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">@(IsNew ? "Add region" : "Save")</button>
+    </div>
+    </ChildContent>
+    </AdminShell>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsNew => Id is null;
+    private bool _loaded, _notFound, _busy, _statusOk, _confirmDelete;
+    private string? _status, _title, _code, _local, _name, _continent, _wiki;
+    private int? _countryId;
+    private int _airports;
+    private List<Country> _countries = new();
+
+    private string CountryIdText
+    {
+        get => _countryId?.ToString() ?? "";
+        set => _countryId = int.TryParse(value, out var v) ? v : null;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _countries = await db.Countries.AsNoTracking().OrderBy(c => c.Name).ToListAsync();
+        if (!IsNew)
+        {
+            var r = await db.Regions.AsNoTracking().FirstOrDefaultAsync(x => x.Id == Id);
+            if (r is null) { _notFound = true; _loaded = true; return; }
+            (_code, _local, _name, _continent, _wiki, _countryId, _title) = (r.Code, r.LocalCode, r.Name, r.Continent, r.WikipediaLink, r.CountryId, $"{r.Name} ({r.Code})");
+            _airports = await db.Airports.CountAsync(a => a.RegionId == Id);
+        }
+        _loaded = true;
+    }
+
+    private static string? T(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+    private void Fail(string m) { _statusOk = false; _status = m; }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            var code = T(_code)?.ToUpperInvariant();
+            if (code is null) { Fail("Enter the region code (e.g. GB-ENG)."); return; }
+            if (T(_name) is not { } name) { Fail("Enter a name."); return; }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.Regions.AnyAsync(r => r.Code == code && r.Id != (Id ?? 0))) { Fail($"{code} already exists."); return; }
+
+            Region r;
+            if (IsNew) { r = new Region(); db.Regions.Add(r); }
+            else r = await db.Regions.FirstAsync(x => x.Id == Id);
+            r.Code = code; r.LocalCode = T(_local)?.ToUpperInvariant(); r.Name = name; r.Continent = T(_continent); r.WikipediaLink = T(_wiki);
+            r.CountryId = _countryId;
+            await db.SaveChangesAsync();
+
+            if (IsNew) { Nav.NavigateTo($"/admin/regions/{r.Id}"); return; }
+            _title = $"{r.Name} ({r.Code})"; _code = code;
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex) { Fail($"Could not save: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var r = await db.Regions.FirstOrDefaultAsync(x => x.Id == Id);
+            if (r is null) { Nav.NavigateTo("/admin/regions"); return; }
+            if (await db.Airports.AnyAsync(a => a.RegionId == Id)) { Fail("This region has airports and can't be removed."); _confirmDelete = false; return; }
+            db.Regions.Remove(r);
+            await db.SaveChangesAsync();
+            Nav.NavigateTo("/admin/regions");
+        }
+        catch (Exception ex) { Fail($"Could not remove: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+}

@@ -1,0 +1,141 @@
+@page "/export"
+@attribute [Authorize]
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+@* Rendered statically: the forms are ordinary posts to /export/pdf and /export/csv so the browser
+   downloads the file itself. *@
+
+<PageTitle>Export · FlightCrewStudio</PageTitle>
+
+<div class="page-head"><h1>Export</h1></div>
+
+@if (_flightCount == 0)
+{
+    <div class="alert alert-info">
+        No flights to export yet. Add your GlobaLog credentials in <a href="/settings">Settings</a>, then run a <a href="/sync">Sync</a>.
+    </div>
+}
+else
+{
+    <p class="text-muted">
+        @_flightCount flights stored, @_first?.ToString("dd/MM/yyyy") to @_last?.ToString("dd/MM/yyyy").
+        All times are UTC.
+    </p>
+
+    <div class="row g-4">
+        <div class="col-lg-7">
+            <div class="card h-100"><div class="card-body">
+                <h5 class="card-title">PDF — EASA (FCL.050)</h5>
+                <form method="post" action="export/pdf">
+                    <AntiforgeryToken />
+                    <div class="row g-3">
+                        <div class="col-sm-7">
+                            <label class="form-label small" for="pdf-name">Pilot name</label>
+                            <input id="pdf-name" name="PilotName" class="form-control" maxlength="100" value="@_name" required />
+                        </div>
+                        <div class="col-sm-5">
+                            <label class="form-label small" for="pdf-licence">Licence number</label>
+                            <input id="pdf-licence" name="LicenceNumber" class="form-control" maxlength="50" value="@_licence" />
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small" for="pdf-from">From</label>
+                            <input id="pdf-from" name="From" type="date" class="form-control" />
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small" for="pdf-to">To</label>
+                            <input id="pdf-to" name="To" type="date" class="form-control" />
+                        </div>
+                        <div class="col-sm-4">
+                            <label class="form-label small" for="pdf-rows">Lines per page</label>
+                            <select id="pdf-rows" name="RowsPerPage" class="form-select">
+                                @foreach (var n in new[] { 10, 12, 14, 16, 18, 20 })
+                                {
+                                    <option value="@n" selected="@(n == 14)">@n</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="pdf-cover" name="CoverPages" value="true" checked />
+                                <label class="form-check-label" for="pdf-cover">Include the title page and licences page</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="pdf-passive" name="IncludePassive" value="true" />
+                                <label class="form-check-label" for="pdf-passive">Include positioning (passive) flights</label>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="small text-muted mt-3 mb-3">
+                        Leave the dates blank for the whole logbook. With a From date, the first page's
+                        “Total From Previous Pages” includes your earlier flights.
+                    </p>
+                    <button type="submit" class="btn btn-primary">Download PDF</button>
+                </form>
+            </div></div>
+        </div>
+
+        <div class="col-lg-5">
+            <div class="card h-100"><div class="card-body">
+                <h5 class="card-title">CSV</h5>
+                <form method="post" action="export/csv">
+                    <AntiforgeryToken />
+                    <div class="row g-3">
+                        <div class="col-6">
+                            <label class="form-label small" for="csv-from">From</label>
+                            <input id="csv-from" name="From" type="date" class="form-control" />
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small" for="csv-to">To</label>
+                            <input id="csv-to" name="To" type="date" class="form-control" />
+                        </div>
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="csv-passive" name="IncludePassive" value="true" />
+                                <label class="form-check-label" for="csv-passive">Include positioning (passive) flights</label>
+                            </div>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary mt-3">Download CSV</button>
+                </form>
+            </div></div>
+        </div>
+    </div>
+}
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private int _flightCount;
+    private DateTime? _first, _last;
+    private string? _name, _licence;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        await using var db = await DbFactory.CreateDbContextAsync();
+
+        var user = await db.Users.AsNoTracking().FirstAsync(u => u.Id == userId);
+        _licence = user.LicenceNumber;
+        _name = user.LogbookName ?? user.DisplayName;
+        if (string.IsNullOrWhiteSpace(_name))
+        {
+            // Fall back to "me" in the crew lists, e.g. "Richard PALMER" → "Richard Palmer".
+            var me = await db.GlobaLogCredentials.AsNoTracking().Where(c => c.UserId == userId)
+                .Select(c => c.MyCrewMember!.Name).FirstOrDefaultAsync();
+            _name = me is null ? null : System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(me.ToLowerInvariant());
+        }
+
+        var flights = db.Flights.AsNoTracking().Where(f => f.UserId == userId && f.OffBlock != null);
+        _flightCount = await flights.CountAsync();
+        if (_flightCount > 0)
+        {
+            _first = await flights.MinAsync(f => f.OffBlock);
+            _last = await flights.MaxAsync(f => f.OffBlock);
+        }
+    }
+}

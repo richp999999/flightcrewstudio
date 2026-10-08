@@ -1,0 +1,123 @@
+@page "/settings/crew"
+@page "/crew"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Crew</PageTitle>
+
+<SettingsShell>
+<div class="page-head">
+    <h1>Crew</h1>
+    <div class="actions"><span class="text-muted">@_rows.Count people</span></div>
+</div>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_rows.Count == 0)
+{
+    <div class="alert alert-info">
+        No crew stored yet. Crew is collected from each flight's page during a <a href="/sync">Sync</a>.
+    </div>
+}
+else
+{
+    <div class="row g-2 mb-3">
+        <div class="col-sm-6 col-lg-4">
+            <input class="form-control" placeholder="Search name or staff no." @bind="_search" @bind:event="oninput" />
+        </div>
+        <div class="col-sm-6 col-lg-3">
+            <select class="form-select" @bind="_role">
+                <option value="">All roles</option>
+                @foreach (var r in _rows.Select(x => x.LatestRole).Where(r => r is not null).Distinct().Order())
+                {
+                    <option value="@r">@r</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    <div class="table-responsive">
+        <table class="table table-hover align-middle table-log">
+            <thead>
+                <tr>
+                    <th>Name</th>
+                    <th>Staff no.</th>
+                    <th>Latest role</th>
+                    <th class="num">Flights together</th>
+                    <th>Last flown</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in Filtered)
+                {
+                    <tr>
+                        <td>
+                            <a class="d-inline-flex align-items-center gap-2" href="/flights?crew=@r.Id">
+                                <span class="avatar" style="background:@Fmt.AvatarColour(r.Id)">@r.Initials</span>@r.DisplayName
+                            </a>
+                        </td>
+                        <td>@r.StaffNumber</td>
+                        <td>@if (r.LatestRole is not null) { <span class="badge badge-soft">@r.LatestRole</span> }</td>
+                        <td class="num">@r.FlightCount</td>
+                        <td>@(r.LastFlown?.ToString("yyyy-MM-dd") ?? "—")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+</SettingsShell>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private sealed record Row(int Id, string DisplayName, string? StaffNumber, string? LatestRole, int FlightCount, DateTime? LastFlown)
+    {
+        public string Initials => Fmt.Initials(new CrewMember { Name = DisplayName.StartsWith("Staff no.") ? null : DisplayName });
+    }
+
+    private bool _loaded;
+    private List<Row> _rows = new();
+    private string _search = "";
+    private string _role = "";
+
+    private IEnumerable<Row> Filtered => _rows
+        .Where(r => _role == "" || r.LatestRole == _role)
+        .Where(r => _search.Trim() == ""
+                    || r.DisplayName.Contains(_search.Trim(), StringComparison.OrdinalIgnoreCase)
+                    || (r.StaffNumber?.Contains(_search.Trim()) ?? false));
+
+    protected override async Task OnInitializedAsync()
+    {
+        var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Per-person flight counts via a plain GROUP BY (MySQL rejects correlated COUNT(DISTINCT …)).
+        var stats = await db.FlightCrew.AsNoTracking()
+            .Where(fc => fc.CrewMember!.UserId == userId)
+            .GroupBy(fc => fc.CrewMemberId)
+            .Select(g => new { Id = g.Key, Count = g.Count(), Last = g.Max(x => x.Flight!.OffBlock) })
+            .ToDictionaryAsync(x => x.Id);
+        var members = await db.CrewMembers.AsNoTracking().Include(c => c.LatestCrewRole).Where(c => c.UserId == userId).ToListAsync();
+        var data = members.Select(c => new
+        {
+            c.Id, c.Name, c.StaffNumber, LatestRole = c.LatestCrewRole?.Name,
+            FlightCount = stats.TryGetValue(c.Id, out var st) ? st.Count : 0,
+            LastFlown = stats.TryGetValue(c.Id, out var st2) ? st2.Last : null
+        }).ToList();
+
+        _rows = data
+            .Select(c => new Row(c.Id, c.Name ?? $"Staff no. {c.StaffNumber}", c.StaffNumber, c.LatestRole, c.FlightCount, c.LastFlown))
+            .OrderByDescending(r => r.FlightCount).ThenBy(r => r.DisplayName)
+            .ToList();
+        _loaded = true;
+    }
+}

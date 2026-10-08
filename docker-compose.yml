@@ -1,0 +1,44 @@
+networks:
+  nginx-default:
+    name: nginx-default
+    external: true
+
+services:
+  app:
+    build: .
+    image: flightcrewstudio:latest
+    container_name: flightcrewstudio-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      # --- Database ---
+      # Point this at your MySQL. When using the bundled `db` service below, host is `db`.
+      ConnectionStrings__DefaultConnection: "Server=${DB_HOST:-db};Port=${DB_PORT:-3306};Database=${DB_NAME:-flightcrewstudio};User=${DB_USER:-globalog};Password=${DB_PASSWORD:-changeme};"
+      # Optional: pin the server version string (e.g. "8.0.36-mysql" or "11.4.2-mariadb").
+      Database__ServerVersion: "${DB_SERVER_VERSION:-}"
+
+      # --- Credential encryption key (held on the server, never in the DB) ---
+      # Leave Encryption__Key blank to auto-generate and persist a key in the mounted /keys volume.
+      # Or set a base64 of 32 bytes to supply your own:  openssl rand -base64 32
+      Encryption__Key: "${ENCRYPTION_KEY:-}"
+      Encryption__KeyFilePath: "/keys/credential-key"
+
+      # --- GlobaLog ---
+      GlobaLog__BaseUrl: "${GLOBALOG_BASE_URL:-https://next.app.globalog.com}"
+
+      # --- Optional SMTP for password-reset / confirmation emails ---
+      Smtp__Host: "${SMTP_HOST:-}"
+      Smtp__Port: "${SMTP_PORT:-587}"
+      Smtp__Username: "${SMTP_USERNAME:-}"
+      Smtp__Password: "${SMTP_PASSWORD:-}"
+      Smtp__From: "${SMTP_FROM:-}"
+      Smtp__UseSsl: "${SMTP_USESSL:-true}"
+
+      ASPNETCORE_ENVIRONMENT: "Production"
+    volumes:
+      - fcs_keys:/keys
+
+
+volumes:
+  fcs_keys:

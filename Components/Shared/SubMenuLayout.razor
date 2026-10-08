@@ -1,0 +1,19 @@
+@* Two-column layout used by Settings and Admin: a labelled sub-menu on the left, the page on the right. *@
+
+<div class="row g-4">
+    <nav class="col-md-3 col-lg-2">
+        <div class="submenu-label">@Label</div>
+        <div class="admin-menu">
+            @Menu
+        </div>
+    </nav>
+    <div class="col-md-9 col-lg-10">
+        @ChildContent
+    </div>
+</div>
+
+@code {
+    [Parameter] public string? Label { get; set; }
+    [Parameter] public RenderFragment? Menu { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

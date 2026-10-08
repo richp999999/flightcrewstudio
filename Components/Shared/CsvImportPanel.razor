@@ -1,0 +1,72 @@
+@* A collapsible "Import from CSV" panel: pick a file, optional extra options, then run the import. *@
+@using FlightCrewStudio.Services.Admin
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center">
+            <h5 class="card-title mb-0">@Title</h5>
+            <button class="btn btn-sm btn-soft" @onclick="() => _open = !_open">@(_open ? "Close" : "Import CSV…")</button>
+        </div>
+        @if (_open)
+        {
+            <p class="small text-muted mt-2 mb-2">@Help</p>
+            <div class="row g-2 align-items-center">
+                <div class="col-md-7">
+                    <InputFile class="form-control" accept=".csv,text/csv" OnChange="OnFileChosen" disabled="@_busy" />
+                </div>
+                <div class="col-md-5">
+                    <button class="btn btn-primary" @onclick="RunAsync" disabled="@(_busy || _file is null)">
+                        @(_busy ? "Importing…" : "Import")
+                    </button>
+                    @if (_file is not null && !_busy) { <span class="small text-muted ms-2">@_file.Name (@(_file.Size / 1024) KB)</span> }
+                </div>
+            </div>
+            @ChildContent
+            @if (_busy && !string.IsNullOrEmpty(Progress)) { <div class="small text-muted mt-2">@Progress</div> }
+            @if (_result is not null)
+            {
+                <div class="alert alert-success py-2 mt-3 mb-0">
+                    Import complete: @_result.Summary
+                    @foreach (var n in _result.Notes) { <div class="small mt-1">⚠ @n</div> }
+                </div>
+            }
+            @if (_error is not null) { <div class="alert alert-danger py-2 mt-3 mb-0">@_error</div> }
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public string Title { get; set; } = "Import";
+    [Parameter] public string? Help { get; set; }
+    [Parameter] public string? Progress { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    /// <summary>Runs the import on the file's text.</summary>
+    [Parameter] public Func<string, Task<ImportResult>> OnImport { get; set; } = default!;
+    /// <summary>Called after a successful import (e.g. to reload the list).</summary>
+    [Parameter] public EventCallback OnImported { get; set; }
+
+    private bool _open, _busy;
+    private IBrowserFile? _file;
+    private ImportResult? _result;
+    private string? _error;
+
+    private void OnFileChosen(InputFileChangeEventArgs e) { _file = e.File; _result = null; _error = null; }
+
+    private async Task RunAsync()
+    {
+        if (_file is null) return;
+        _busy = true; _result = null; _error = null;
+        try
+        {
+            if (_file.Size > ReferenceDataImporter.MaxFileBytes)
+                throw new InvalidOperationException($"That file is too large (limit {ReferenceDataImporter.MaxFileBytes / 1024 / 1024} MB).");
+            await using var stream = _file.OpenReadStream(ReferenceDataImporter.MaxFileBytes);
+            using var reader = new StreamReader(stream);
+            var text = await reader.ReadToEndAsync();
+            _result = await OnImport(text);
+            await OnImported.InvokeAsync();
+        }
+        catch (Exception ex) { _error = ex is FormatException or InvalidOperationException ? ex.Message : $"Import failed: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+}
