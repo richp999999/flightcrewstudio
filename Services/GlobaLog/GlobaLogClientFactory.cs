@@ -20,14 +20,14 @@ public sealed class GlobaLogClientFactory(IOptions<GlobaLogOptions> options, ICr
         {
             var token = protector.Unprotect(credential.ApiTokenCipher);
             if (string.IsNullOrWhiteSpace(token))
-                throw new GlobaLogException("No GlobaLog API token saved. Add one in Settings.");
+                throw new GlobaLogException("No GlobaLog API token saved. Add one in Settings → GlobaLog.");
             return new TokenGlobaLogClient(_opt.BaseUrl, token, _opt.TimeoutSeconds, loggers.CreateLogger<TokenGlobaLogClient>());
         }
 
         var username = protector.Unprotect(credential.UsernameCipher);
         var password = protector.Unprotect(credential.PasswordCipher);
         if (string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))
-            throw new GlobaLogException("No GlobaLog username/password saved. Add them in Settings.");
+            throw new GlobaLogException("No GlobaLog username/password saved. Add them in Settings → GlobaLog.");
         return new WebSessionGlobaLogClient(_opt.BaseUrl, username, password, _opt.TimeoutSeconds, loggers.CreateLogger<WebSessionGlobaLogClient>());
     }
 }

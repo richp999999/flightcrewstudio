@@ -260,6 +260,7 @@ public static partial class LogbookAeroImporter
         var roles = await CrewRoleLookup.LoadAsync(db, ct);
         var aircraft = await AircraftLookup.LoadAsync(db, userId, ct);
         var airports = await AirportLookup.LoadAsync(db, ct);
+        var icaoTypes = await IcaoTypeLookup.LoadAsync(db, ct);
         var aircraftBefore = await db.Aircraft.CountAsync(a => a.UserId == userId, ct);
         var airportsBefore = await db.Airports.CountAsync(ct);
 
@@ -312,11 +313,12 @@ public static partial class LogbookAeroImporter
                 LastUpdatedAt = DateTime.UtcNow,
             };
 
-            if (aircraft.Resolve(f.Registration, f.TypeModel, f.TypeManufacturer) is { } ac)
+            if (aircraft.Resolve(f.Registration) is { } ac)
             {
                 flight.Aircraft = ac;
-                if (ac.AircraftType is { IcaoCode: null } t && f.TypeCode is not null && f.TypeCode != t.Name.ToUpperInvariant())
-                    t.IcaoCode = f.TypeCode;
+                // The aircraft's ICAO type, by the file's designator ("A21N"), when it hasn't one yet.
+                if (ac.IcaoAircraftTypeId is null && icaoTypes.Find(f.TypeCode, f.TypeManufacturer, f.TypeModel) is { } icaoTypeId)
+                    ac.IcaoAircraftTypeId = icaoTypeId;
             }
 
             // Crew, in column order. A captain named only in PIC_Name is added too.

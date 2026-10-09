@@ -5,8 +5,10 @@ networks:
 
 services:
   app:
-    build: .
-    image: flightcrewstudio:latest
+    # Pulled from Docker Hub — build and push it with build-push.ps1 (or build-push.sh).
+    # Set FCS_IMAGE in .env to use another repository or a specific version tag.
+    image: ${FCS_IMAGE:-richp999999/flightcrewstudio:latest}
+    pull_policy: always
     container_name: flightcrewstudio-app
     restart: unless-stopped
     ports:

@@ -17,7 +17,7 @@
 @if (_flightCount == 0)
 {
     <div class="alert alert-info">
-        No flights to export yet. Add your GlobaLog credentials in <a href="/settings">Settings</a>, then run a <a href="/sync">Sync</a>.
+        No flights to export yet. Add your GlobaLog credentials in <a href="/settings/globalog">Settings</a>, then <a href="/import/globalog">import from GlobaLog</a>.
     </div>
 }
 else
@@ -31,17 +31,13 @@ else
         <div class="col-lg-7">
             <div class="card h-100"><div class="card-body">
                 <h5 class="card-title">PDF — EASA (FCL.050)</h5>
+                <p class="small mb-3">
+                    Printed as <strong>@_name</strong>@(string.IsNullOrWhiteSpace(_licence) ? ", no licence number" : $" ({_licence})")
+                    — change in <a href="/settings">Settings → Me</a>.
+                </p>
                 <form method="post" action="export/pdf">
                     <AntiforgeryToken />
                     <div class="row g-3">
-                        <div class="col-sm-7">
-                            <label class="form-label small" for="pdf-name">Pilot name</label>
-                            <input id="pdf-name" name="PilotName" class="form-control" maxlength="100" value="@_name" required />
-                        </div>
-                        <div class="col-sm-5">
-                            <label class="form-label small" for="pdf-licence">Licence number</label>
-                            <input id="pdf-licence" name="LicenceNumber" class="form-control" maxlength="50" value="@_licence" />
-                        </div>
                         <div class="col-sm-4">
                             <label class="form-label small" for="pdf-from">From</label>
                             <input id="pdf-from" name="From" type="date" class="form-control" />
@@ -119,16 +115,7 @@ else
         var userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
         await using var db = await DbFactory.CreateDbContextAsync();
 
-        var user = await db.Users.AsNoTracking().FirstAsync(u => u.Id == userId);
-        _licence = user.LicenceNumber;
-        _name = user.LogbookName ?? user.DisplayName;
-        if (string.IsNullOrWhiteSpace(_name))
-        {
-            // Fall back to "me" in the crew lists, e.g. "Richard PALMER" → "Richard Palmer".
-            var me = await db.GlobaLogCredentials.AsNoTracking().Where(c => c.UserId == userId)
-                .Select(c => c.MyCrewMember!.Name).FirstOrDefaultAsync();
-            _name = me is null ? null : System.Globalization.CultureInfo.InvariantCulture.TextInfo.ToTitleCase(me.ToLowerInvariant());
-        }
+        (_name, _licence) = await FlightCrewStudio.Services.PilotIdentity.GetAsync(db, userId);
 
         var flights = db.Flights.AsNoTracking().Where(f => f.UserId == userId && f.OffBlock != null);
         _flightCount = await flights.CountAsync();

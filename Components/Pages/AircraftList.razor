@@ -29,7 +29,7 @@ else
 {
     @if (_aircraft.Count == 0)
     {
-        <div class="alert alert-info">No aircraft yet. <a href="/settings/aircraft/new">Add one</a>, or run a <a href="/sync">Sync</a>.</div>
+        <div class="alert alert-info">No aircraft yet. <a href="/settings/aircraft/new">Add one</a>, or <a href="/import/globalog">import from GlobaLog</a>.</div>
     }
     else
     {
@@ -40,6 +40,7 @@ else
                         <th>Registration</th>
                         <th>Type</th>
                         <th>Manufacturer</th>
+                        <th>Model</th>
                         <th class="num">Flights</th>
                         <th>Last flown</th>
                     </tr>
@@ -52,6 +53,7 @@ else
                             <td class="fw-bold"><a class="text-reset" href="/settings/aircraft/@id" @onclick:stopPropagation="true">@r.Display</a></td>
                             <td>@if (r.Type is not null) { <span class="badge badge-soft">@r.Type</span> }</td>
                             <td>@r.Manufacturer</td>
+                            <td>@r.Model</td>
                             <td class="num">
                                 @if (r.Flights > 0) { <a href="/flights?aircraft=@id" @onclick:stopPropagation="true">@r.Flights</a> } else { <span class="text-muted">0</span> }
                             </td>
@@ -63,45 +65,16 @@ else
         </div>
     }
 
-    <div class="d-flex justify-content-between align-items-center mt-4">
-        <h2 class="section-title m-0">Types</h2>
-        <a class="btn btn-soft btn-sm" href="/settings/aircraft/types/new">+ Add type</a>
-    </div>
-    @if (_types.Count == 0)
-    {
-        <p class="text-muted mt-2">No aircraft types yet.</p>
-    }
-    else
-    {
-        <div class="table-responsive mt-2">
-            <table class="table table-hover align-middle table-log">
-                <thead><tr><th>Type</th><th>Manufacturer</th><th class="num">Aircraft</th></tr></thead>
-                <tbody>
-                    @foreach (var t in _types)
-                    {
-                        var id = t.Id;
-                        <tr class="clickable-row" @onclick="@(() => Nav.NavigateTo("/settings/aircraft/types/" + id))" title="Open type">
-                            <td><a class="text-reset fw-medium" href="/settings/aircraft/types/@id" @onclick:stopPropagation="true">@t.Name</a></td>
-                            <td>@t.Manufacturer</td>
-                            <td class="num">@t.AircraftCount</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        </div>
-    }
 }
 </SettingsShell>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
 
-    private sealed record AircraftRow(int Id, string Display, string? Type, string? Manufacturer, int Flights, DateTime? LastFlown);
-    private sealed record TypeRow(int Id, string Name, string? Manufacturer, int AircraftCount);
+    private sealed record AircraftRow(int Id, string Display, string? Type, string? Manufacturer, string? Model, int Flights, DateTime? LastFlown);
 
     private bool _loaded;
     private List<AircraftRow> _aircraft = new();
-    private List<TypeRow> _types = new();
 
     protected override async Task OnInitializedAsync()
     {
@@ -113,18 +86,14 @@ else
             .GroupBy(f => f.AircraftId!.Value)
             .Select(g => new { Id = g.Key, Count = g.Count(), Last = g.Max(f => f.OffBlock) })
             .ToDictionaryAsync(x => x.Id);
-        var aircraft = await db.Aircraft.AsNoTracking().Include(a => a.AircraftType).Where(a => a.UserId == userId).ToListAsync();
+        var aircraft = await db.Aircraft.AsNoTracking()
+            .Include(a => a.IcaoAircraftType).ThenInclude(t => t!.Manufacturer).Where(a => a.UserId == userId).ToListAsync();
         _aircraft = aircraft
-            .Select(a => new AircraftRow(a.Id, a.DisplayRegistration, a.AircraftType?.Name, a.AircraftType?.Manufacturer,
+            .Select(a => new AircraftRow(a.Id, a.DisplayRegistration,
+                a.IcaoAircraftType?.Designator, a.IcaoAircraftType?.Manufacturer?.Code, a.IcaoAircraftType?.Model,
                 stats.TryGetValue(a.Id, out var s) ? s.Count : 0,
                 stats.TryGetValue(a.Id, out var s2) ? s2.Last : null))
             .OrderByDescending(r => r.Flights).ThenBy(r => r.Display)
-            .ToList();
-
-        var typeCounts = aircraft.Where(a => a.AircraftTypeId != null).GroupBy(a => a.AircraftTypeId!.Value).ToDictionary(g => g.Key, g => g.Count());
-        _types = (await db.AircraftTypes.AsNoTracking().Where(t => t.UserId == userId).ToListAsync())
-            .Select(t => new TypeRow(t.Id, t.Name, t.Manufacturer, typeCounts.GetValueOrDefault(t.Id)))
-            .OrderBy(t => t.Manufacturer).ThenBy(t => t.Name)
             .ToList();
         _loaded = true;
     }

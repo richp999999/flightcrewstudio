@@ -13,7 +13,6 @@
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject NavigationManager Nav
-@inject IOptions<GlobaLogOptions> GlobaLogOpts
 
 <PageTitle>@(_m is null ? "Flight" : $"{_m.Name} {_m.OffBlock:dd/MM/yyyy}") · FlightCrewStudio</PageTitle>
 
@@ -24,7 +23,7 @@
 else if (_m is null)
 {
     <div class="page-head"><h1>Flight not found</h1></div>
-    <a href="/flights">« Back to flights</a>
+    <a href="@BackUrl">« Back to flights</a>
 }
 else
 {
@@ -34,11 +33,7 @@ else
             <span class="text-muted fs-5 ms-2">@IcaoOf(_m.DepartureAirportId) → @IcaoOf(_m.ArrivalAirportId) · @_m.OffBlock?.ToString("ddd dd/MM/yyyy")</span>
         </h1>
         <div class="actions">
-            <a href="/flights">« Flights</a>
-            @if (_globaLogUrl is not null)
-            {
-                <a href="@_globaLogUrl" target="_blank" rel="noopener">Open in GlobaLog ↗</a>
-            }
+            <a href="@BackUrl">« Flights</a>
         </div>
     </div>
 
@@ -77,7 +72,7 @@ else
                             <option value="">—</option>
                             @foreach (var ac in _aircraft)
                             {
-                                <option value="@ac.Id">@ac.DisplayRegistration@(ac.AircraftType is null ? "" : $" — {ac.AircraftType.Name}")</option>
+                                <option value="@ac.Id">@ac.DisplayRegistration@(ac.IcaoAircraftType is null ? "" : $" — {ac.IcaoAircraftType.Designator}")</option>
                             }
                         </select>
                     </div>
@@ -123,7 +118,7 @@ else
                     </div>
                     <div class="col-4"><label class="form-label small">IFR (h:mm)</label><input class="form-control" @bind="InstrText" /></div>
                     <div class="col-12 form-text mt-0">
-                        @if (_dayNightCalculated) { <span>Day and night are calculated from the off-/on-block times along the great-circle route (sunset to sunrise is night).</span> }
+                        @if (_dayNightCalculated) { <span>Day and night are calculated from the off-/on-block times along the great-circle route (night is from the end of evening civil twilight to the start of morning civil twilight, as EASA defines it).</span> }
                         else if (_dayNightReason is not null) { <span class="text-warning-emphasis">Day/night can't be calculated: @_dayNightReason You can enter them by hand.</span> }
                     </div>
                     <div class="col-6">
@@ -243,6 +238,12 @@ else
 
 @code {
     [Parameter] public int Id { get; set; }
+
+    /// <summary>The Flights list page this flight was opened from (e.g. "/flights?page=12").</summary>
+    [SupplyParameterFromQuery(Name = "return")] private string? ReturnUrl { get; set; }
+
+    /// <summary>Back to that list page; only local Flights-list addresses are accepted.</summary>
+    private string BackUrl => ReturnUrl is { } r && r.StartsWith("/flights", StringComparison.Ordinal) && !r.StartsWith("//") ? r : "/flights";
     [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
 
     private bool _loaded, _busy, _statusOk;
@@ -251,7 +252,6 @@ else
     private Flight? _m;                 // detached copy being edited
     private bool _editedLocally;
     private DateTime? _editedAt;
-    private string? _globaLogUrl;
     private int? _myCrewMemberId;
     private List<CrewRow> _crew = new();
     private List<CrewRole> _roles = new();
@@ -359,16 +359,12 @@ else
         var dn = FlightCrewStudio.Services.DayNight.FlightDayNight.Calculate(_m.OffBlock, _m.OnBlock, _depAirport, _arrAirport, out _dayNightReason, _m.ArrivalTime);
         _dayNightCalculated = dn is not null;
         if (dn is { } v0) { _m.TotalDayMinutes = v0.DayMinutes; _m.TotalNightMinutes = v0.NightMinutes; _m.NightLanding = v0.NightLanding; }
-        _aircraft = (await db.Aircraft.AsNoTracking().Include(a => a.AircraftType).Where(a => a.UserId == _userId).ToListAsync())
-            .OrderBy(a => a.AircraftType?.Name).ThenBy(a => a.Registration).ToList();
+        _aircraft = (await db.Aircraft.AsNoTracking().Include(a => a.IcaoAircraftType).Where(a => a.UserId == _userId).ToListAsync())
+            .OrderBy(a => a.IcaoAircraftType?.Designator).ThenBy(a => a.Registration).ToList();
         _roles = await db.CrewRoles.AsNoTracking().OrderBy(r => r.SortOrder).ThenBy(r => r.Name).ToListAsync();
         _memberOptions = (await db.CrewMembers.AsNoTracking().Where(c => c.UserId == _userId).ToListAsync())
             .OrderBy(c => c.Name is null).ThenBy(c => c.DisplayName).ToList();
         _members = _memberOptions.ToDictionary(c => c.Id);
-
-        // Imported flights (e.g. from logbook.aero) have no GlobaLog page.
-        _globaLogUrl = _m.Source is null && _m.GlobaLogFlightId > 0
-            ? $"{GlobaLogOpts.Value.BaseUrl.TrimEnd('/')}/flights/{_m.GlobaLogFlightId}" : null;
     }
 
     private void AddCrewRow() => _crew.Add(new CrewRow { CrewRoleId = CrewRole.CabinCrewId });

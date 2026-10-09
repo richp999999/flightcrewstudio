@@ -193,3 +193,10 @@ h1:focus { outline: none; }
 .opening-sub { display: block; font-weight: 600; font-size: .85rem; margin-bottom: .25rem; }
 .opening .form-control { font-variant-numeric: tabular-nums; }
 @media (max-width: 575.98px) { .opening-label { flex-basis: 100%; padding-bottom: 0; font-weight: 600; } }
+
+/* ---- row delete icon (admin lists) ---- */
+.btn-icon { border: 0; background: transparent; color: var(--fcs-muted); padding: .2rem .35rem; border-radius: .25rem; line-height: 1; }
+.btn-icon:hover { color: var(--fcs-danger); background: #fbeaec; }
+.btn-icon.disabled { opacity: .35; cursor: not-allowed; }
+.btn-icon.disabled:hover { color: var(--fcs-muted); background: transparent; }
+.row-delete-confirm { white-space: nowrap; }

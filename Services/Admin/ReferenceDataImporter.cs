@@ -7,7 +7,7 @@ namespace FlightCrewStudio.Services.Admin;
 /// <summary>Outcome of a CSV import, shown on the admin page.</summary>
 public sealed record ImportResult(int Added, int Updated, int Skipped, IReadOnlyList<string> Notes)
 {
-    public string Summary => $"{Added:N0} added, {Updated:N0} updated" + (Skipped > 0 ? $", {Skipped:N0} skipped" : "") + ".";
+    public string Summary => $"{Added:N0} added" + (Updated > 0 ? $", {Updated:N0} updated" : "") + (Skipped > 0 ? $", {Skipped:N0} skipped" : "") + ".";
 }
 
 /// <summary>
@@ -178,5 +178,107 @@ public sealed class ReferenceDataImporter(IDbContextFactory<ApplicationDbContext
         if (missingRegion > 0) notes.Add($"{missingRegion:N0} airport(s) refer to a region that isn't loaded — import regions first.");
         logger.LogInformation("Airports import: {Added} added, {Updated} updated, {Skipped} skipped", added, updated, skipped);
         return new ImportResult(added, updated, skipped, notes);
+    }
+
+    // ------------------------------------------------------------------ ICAO manufacturers / aircraft types
+    //
+    // Unlike the OurAirports files these never overwrite: a code already stored is skipped, so
+    // edits made here are kept. When a code appears more than once in the file, the first row wins.
+
+    private static void RequireColumns(Csv.Table t, string what, params string[] columns)
+    {
+        var missing = columns.Where(c => !t.Has(c)).ToList();
+        if (missing.Count > 0)
+            throw new FormatException($"This doesn't look like an ICAO {what} file — missing column(s): {string.Join(", ", missing)}.");
+    }
+
+    /// <summary>icao_manufacturers.csv: Code, Name, State.</summary>
+    public async Task<ImportResult> ImportManufacturersAsync(string csv, CancellationToken ct = default)
+    {
+        var t = new Csv.Table(csv);
+        RequireColumns(t, "manufacturers", "Code", "Name");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var known = (await db.Manufacturers.Select(m => m.Code).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int added = 0, existing = 0, duplicates = 0, invalid = 0;
+
+        foreach (var row in t.Rows)
+        {
+            var code = Manufacturer.NormalizeCode(t.Get(row, "Code"));
+            var name = t.Get(row, "Name");
+            if (code is null || name is null || code.Length > 100) { invalid++; continue; }
+            if (!seen.Add(code)) { duplicates++; continue; }        // first entry for a code wins
+            if (known.Contains(code)) { existing++; continue; }    // never overwrite
+
+            db.Manufacturers.Add(new Manufacturer { Code = code, Name = Cut(name, 200)!, State = Cut(t.Get(row, "State"), 100) });
+            added++;
+        }
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Manufacturers import: {Added} added, {Existing} already stored, {Dup} duplicate codes, {Invalid} invalid", added, existing, duplicates, invalid);
+
+        var notes = new List<string>();
+        if (existing > 0) notes.Add($"{existing:N0} already stored — left as they are.");
+        if (duplicates > 0) notes.Add($"{duplicates:N0} repeated code(s) in the file — only the first entry for each was used.");
+        if (invalid > 0) notes.Add($"{invalid:N0} row(s) without a code or name were skipped.");
+        return new ImportResult(added, 0, existing + duplicates + invalid, notes);
+    }
+
+    /// <summary>
+    /// icao_aircraft_types.csv: Designator, Manufacturer (code), Model, Description, AircraftDescription,
+    /// EngineCount, EngineType, WTC, WTG. Each type is linked to its manufacturer by code, so import
+    /// manufacturers first.
+    /// </summary>
+    public async Task<ImportResult> ImportAircraftTypesAsync(string csv, CancellationToken ct = default)
+    {
+        var t = new Csv.Table(csv);
+        RequireColumns(t, "aircraft types", "Designator", "Manufacturer", "Model");
+
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var makers = await db.Manufacturers.AsNoTracking().ToDictionaryAsync(m => m.Code, m => m.Id, StringComparer.OrdinalIgnoreCase, ct);
+        var known = (await db.IcaoAircraftTypes.Select(a => a.Designator).ToListAsync(ct)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var missingMakers = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        int added = 0, existing = 0, duplicates = 0, invalid = 0;
+
+        foreach (var row in t.Rows)
+        {
+            var designator = IcaoAircraftType.NormalizeDesignator(t.Get(row, "Designator"));
+            var model = t.Get(row, "Model");
+            if (designator is null || designator.Length > 4 || model is null) { invalid++; continue; }
+            if (!seen.Add(designator)) { duplicates++; continue; }      // first entry for a designator wins
+            if (known.Contains(designator)) { existing++; continue; }  // never overwrite
+
+            var makerCode = Manufacturer.NormalizeCode(t.Get(row, "Manufacturer"));
+            int? makerId = makerCode is not null && makers.TryGetValue(makerCode, out var mid) ? mid : null;
+            if (makerCode is not null && makerId is null) missingMakers.Add(makerCode);
+
+            db.IcaoAircraftTypes.Add(new IcaoAircraftType
+            {
+                Designator = designator,
+                ManufacturerId = makerId,
+                Model = Cut(model, 100)!,
+                Description = Cut(t.Get(row, "Description"), 3),
+                AircraftKind = Cut(t.Get(row, "AircraftDescription"), 20),
+                EngineCount = Cut(t.Get(row, "EngineCount"), 2),
+                EngineType = Cut(t.Get(row, "EngineType"), 30),
+                Wtc = Cut(t.Get(row, "WTC"), 3),
+                Wtg = Cut(t.Get(row, "WTG"), 1),
+            });
+            added++;
+            if (added % BatchSize == 0) await db.SaveChangesAsync(ct);
+        }
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Aircraft types import: {Added} added, {Existing} already stored, {Dup} duplicate designators, {Invalid} invalid, {Missing} unknown manufacturers",
+            added, existing, duplicates, invalid, missingMakers.Count);
+
+        var notes = new List<string>();
+        if (existing > 0) notes.Add($"{existing:N0} already stored — left as they are.");
+        if (duplicates > 0) notes.Add($"{duplicates:N0} repeated designator(s) in the file — only the first entry for each was used.");
+        if (invalid > 0) notes.Add($"{invalid:N0} row(s) without a designator or model were skipped.");
+        if (missingMakers.Count > 0)
+            notes.Add($"No manufacturer stored for {missingMakers.Count:N0} code(s), so those types aren't linked to one (import manufacturers first): " +
+                      string.Join(", ", missingMakers.Take(15)) + (missingMakers.Count > 15 ? " …" : ""));
+        return new ImportResult(added, 0, existing + duplicates + invalid, notes);
     }
 }

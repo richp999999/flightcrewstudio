@@ -44,13 +44,21 @@ else
                     <input class="form-control text-uppercase" maxlength="20" placeholder="G-ABCD" @bind="_registration" />
                 </div>
                 <div class="mb-1">
-                    <label class="form-label small">Type</label>
-                    <select class="form-select" @bind="_typeIdText">
-                        <option value="">—</option>
-                        @foreach (var t in _types) { <option value="@t.Id">@t.DisplayName</option> }
+                    <label class="form-label small">Aircraft type</label>
+                    <select class="form-select" @bind="_icaoTypeIdText">
+                        <option value="">— not set —</option>
+                        @if (_icaoTypesUsed.Count > 0)
+                        {
+                            <optgroup label="Types of your aircraft">
+                                @foreach (var t in _icaoTypesUsed) { <option value="@t.Id">@t.Label</option> }
+                            </optgroup>
+                        }
+                        <optgroup label="All ICAO types">
+                            @foreach (var t in _icaoTypes) { <option value="@t.Id">@t.Label</option> }
+                        </optgroup>
                     </select>
+                    @if (_icaoTypes.Count == 0) { <div class="form-text">No aircraft types stored yet — an administrator imports them under Admin → Aircraft Types.</div> }
                 </div>
-                <div class="form-text"><a href="/settings/aircraft/types/new">+ Add a new type</a> (save this aircraft first if you've made changes)</div>
             </div></div>
         </div>
 
@@ -104,9 +112,13 @@ else
     private bool IsNew => Id is null;
     private bool _loaded, _notFound, _busy, _statusOk, _confirmDelete;
     private string? _status, _registration, _title;
-    private string _typeIdText = "";
     private string _userId = default!;
-    private List<AircraftType> _types = new();
+
+    /// <summary>ICAO aircraft types for the dropdown ("A21N — AIRBUS A-321neo").</summary>
+    private sealed record IcaoTypeOption(int Id, string Label);
+    private List<IcaoTypeOption> _icaoTypes = new();
+    private List<IcaoTypeOption> _icaoTypesUsed = new();
+    private string _icaoTypeIdText = "";
     private int _flightCount;
     private DateTime? _lastFlown;
 
@@ -114,8 +126,13 @@ else
     {
         _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
         await using var db = await DbFactory.CreateDbContextAsync();
-        _types = await db.AircraftTypes.AsNoTracking().Where(t => t.UserId == _userId)
-            .OrderBy(t => t.Manufacturer).ThenBy(t => t.Name).ToListAsync();
+        _icaoTypes = (await db.IcaoAircraftTypes.AsNoTracking().OrderBy(t => t.Designator)
+                .Select(t => new { t.Id, t.Designator, Maker = t.Manufacturer != null ? t.Manufacturer.Code : null, t.Model }).ToListAsync())
+            .Select(t => new IcaoTypeOption(t.Id, $"{t.Designator} — {(t.Maker is null ? "" : t.Maker + " ")}{t.Model}"))
+            .ToList();
+        var usedIds = (await db.Aircraft.AsNoTracking().Where(a => a.UserId == _userId && a.IcaoAircraftTypeId != null)
+            .Select(a => a.IcaoAircraftTypeId!.Value).Distinct().ToListAsync()).ToHashSet();
+        _icaoTypesUsed = _icaoTypes.Where(t => usedIds.Contains(t.Id)).ToList();
 
         if (!IsNew)
         {
@@ -123,7 +140,7 @@ else
             if (ac is null) { _notFound = true; _loaded = true; return; }
             _registration = ac.DisplayRegistration;
             _title = ac.DisplayRegistration;
-            _typeIdText = ac.AircraftTypeId?.ToString() ?? "";
+            _icaoTypeIdText = ac.IcaoAircraftTypeId?.ToString() ?? "";
             _flightCount = await db.Flights.CountAsync(f => f.AircraftId == Id);
             _lastFlown = await db.Flights.Where(f => f.AircraftId == Id).MaxAsync(f => f.OffBlock);
         }
@@ -142,7 +159,7 @@ else
             if (await db.Aircraft.AnyAsync(a => a.UserId == _userId && a.Registration == reg && a.Id != (Id ?? 0)))
             { _statusOk = false; _status = $"{new Aircraft { Registration = reg }.DisplayRegistration} already exists."; return; }
 
-            int? typeId = int.TryParse(_typeIdText, out var t) && await db.AircraftTypes.AnyAsync(x => x.Id == t && x.UserId == _userId) ? t : null;
+            int? icaoTypeId = int.TryParse(_icaoTypeIdText, out var it) && await db.IcaoAircraftTypes.AnyAsync(x => x.Id == it) ? it : null;
 
             Aircraft ac;
             if (IsNew)
@@ -155,7 +172,7 @@ else
                 ac = await db.Aircraft.FirstAsync(a => a.Id == Id && a.UserId == _userId);
             }
             ac.Registration = reg;
-            ac.AircraftTypeId = typeId;
+            ac.IcaoAircraftTypeId = icaoTypeId;
             await db.SaveChangesAsync();
 
             if (IsNew) { Nav.NavigateTo($"/settings/aircraft/{ac.Id}"); return; }

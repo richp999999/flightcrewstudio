@@ -44,7 +44,11 @@ public sealed class CrewRoleLookup
         name = name.Trim();
         if (_byName.TryGetValue(name, out var role)) return role;
 
-        role = new CrewRole { Name = name.Length > 50 ? name[..50] : name, SortOrder = 100, IsFlightDeck = flightDeck };
+        role = new CrewRole
+        {
+            Name = name.Length > 50 ? name[..50] : name, SortOrder = 100, IsFlightDeck = flightDeck,
+            CountsAsFlightTime = !CrewRole.NotFlightTimeNames.Contains(name, StringComparer.OrdinalIgnoreCase),
+        };
         _db.CrewRoles.Add(role);
         _byName[name] = role;
         return role;

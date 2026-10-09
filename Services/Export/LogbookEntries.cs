@@ -91,12 +91,12 @@ public static class LogbookEntries
             query = query.Where(f => f.OffBlock < end);
         }
         if (!filter.IncludePassive)
-            query = query.Where(f => f.MyCrewRoleId == null || (f.MyCrewRoleId != CrewRole.PassiveId && f.MyCrewRoleId != CrewRole.CabinCrewId));
+            query = query.Where(f => f.MyCrewRole == null || f.MyCrewRole.CountsAsFlightTime);   // positioning, cabin crew, supernumerary
 
         var flights = await query
             .Include(f => f.Crew).ThenInclude(c => c.CrewMember)
             .Include(f => f.Crew).ThenInclude(c => c.CrewRole)
-            .Include(f => f.Aircraft).ThenInclude(a => a!.AircraftType)
+            .Include(f => f.Aircraft).ThenInclude(a => a!.IcaoAircraftType).ThenInclude(t => t!.Manufacturer)
             .Include(f => f.DepartureAirport)
             .Include(f => f.ArrivalAirport)
             .AsSplitQuery()
@@ -130,7 +130,7 @@ public static class LogbookEntries
         var nightTakeoff = pf && f.DepartureAirport is { Latitude: { } lat, Longitude: { } lon }
             && DayNightCalculator.IsNight(DateTime.SpecifyKind((f.DepartureTime ?? f.OffBlock)!.Value, DateTimeKind.Utc), lat, lon);
 
-        var type = f.Aircraft?.AircraftType;
+        var type = f.Aircraft?.IcaoAircraftType;
         return new LogbookEntry
         {
             Date = f.OffBlock!.Value.Date,
@@ -139,9 +139,10 @@ public static class LogbookEntries
             OffBlock = f.OffBlock,
             Arrival = f.ArrivalAirport?.Icao,
             OnBlock = f.OnBlock,
+            // The aircraft's ICAO type (the only aircraft type there is).
             TypeCode = type?.Designator,
-            TypeManufacturer = type?.Manufacturer is { Length: > 0 } m ? TitleCase(m) : null,
-            TypeModel = type?.Name,
+            TypeManufacturer = type?.Manufacturer?.Code is { Length: > 0 } m ? TitleCase(m) : null,
+            TypeModel = type?.Model,
             Registration = f.Aircraft?.DisplayRegistration,
             TotalMinutes = block,
             SingleEngineMinutes = f.LoggedSingleEngineMinutes ?? 0,

@@ -30,11 +30,11 @@ namespace FlightCrewStudio.Data.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
-                    b.Property<int?>("AircraftTypeId")
-                        .HasColumnType("int");
-
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime(6)");
+
+                    b.Property<int?>("IcaoAircraftTypeId")
+                        .HasColumnType("int");
 
                     b.Property<string>("Registration")
                         .IsRequired()
@@ -47,48 +47,12 @@ namespace FlightCrewStudio.Data.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("AircraftTypeId");
+                    b.HasIndex("IcaoAircraftTypeId");
 
                     b.HasIndex("UserId", "Registration")
                         .IsUnique();
 
                     b.ToTable("Aircraft");
-                });
-
-            modelBuilder.Entity("FlightCrewStudio.Data.AircraftType", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int");
-
-                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime(6)");
-
-                    b.Property<string>("IcaoCode")
-                        .HasMaxLength(4)
-                        .HasColumnType("varchar(4)");
-
-                    b.Property<string>("Manufacturer")
-                        .HasMaxLength(50)
-                        .HasColumnType("varchar(50)");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("varchar(50)");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasColumnType("varchar(255)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId", "Name")
-                        .IsUnique();
-
-                    b.ToTable("AircraftTypes");
                 });
 
             modelBuilder.Entity("FlightCrewStudio.Data.Airport", b =>
@@ -315,6 +279,9 @@ namespace FlightCrewStudio.Data.Migrations
 
                     MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
 
+                    b.Property<bool>("CountsAsFlightTime")
+                        .HasColumnType("tinyint(1)");
+
                     b.Property<bool>("IsFlightDeck")
                         .HasColumnType("tinyint(1)");
 
@@ -341,6 +308,7 @@ namespace FlightCrewStudio.Data.Migrations
                         new
                         {
                             Id = 1,
+                            CountsAsFlightTime = true,
                             IsFlightDeck = true,
                             Name = "Captain",
                             ShortName = "CPT",
@@ -349,6 +317,7 @@ namespace FlightCrewStudio.Data.Migrations
                         new
                         {
                             Id = 2,
+                            CountsAsFlightTime = true,
                             IsFlightDeck = true,
                             Name = "First officer",
                             ShortName = "FO",
@@ -357,6 +326,7 @@ namespace FlightCrewStudio.Data.Migrations
                         new
                         {
                             Id = 3,
+                            CountsAsFlightTime = true,
                             IsFlightDeck = true,
                             Name = "Second officer",
                             ShortName = "SO",
@@ -365,6 +335,7 @@ namespace FlightCrewStudio.Data.Migrations
                         new
                         {
                             Id = 4,
+                            CountsAsFlightTime = false,
                             IsFlightDeck = false,
                             Name = "Cabin crew",
                             ShortName = "CC",
@@ -373,6 +344,7 @@ namespace FlightCrewStudio.Data.Migrations
                         new
                         {
                             Id = 5,
+                            CountsAsFlightTime = false,
                             IsFlightDeck = false,
                             Name = "Passive",
                             ShortName = "PAX",
@@ -590,6 +562,91 @@ namespace FlightCrewStudio.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("GlobaLogCredentials");
+                });
+
+            modelBuilder.Entity("FlightCrewStudio.Data.IcaoAircraftType", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AircraftKind")
+                        .HasMaxLength(20)
+                        .HasColumnType("varchar(20)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(3)
+                        .HasColumnType("varchar(3)");
+
+                    b.Property<string>("Designator")
+                        .IsRequired()
+                        .HasMaxLength(4)
+                        .HasColumnType("varchar(4)");
+
+                    b.Property<string>("EngineCount")
+                        .HasMaxLength(2)
+                        .HasColumnType("varchar(2)");
+
+                    b.Property<string>("EngineType")
+                        .HasMaxLength(30)
+                        .HasColumnType("varchar(30)");
+
+                    b.Property<int?>("ManufacturerId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Model")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("Wtc")
+                        .HasMaxLength(3)
+                        .HasColumnType("varchar(3)");
+
+                    b.Property<string>("Wtg")
+                        .HasMaxLength(1)
+                        .HasColumnType("varchar(1)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Designator")
+                        .IsUnique();
+
+                    b.HasIndex("ManufacturerId");
+
+                    b.ToTable("IcaoAircraftTypes");
+                });
+
+            modelBuilder.Entity("FlightCrewStudio.Data.Manufacturer", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    MySqlPropertyBuilderExtensions.UseMySqlIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("varchar(200)");
+
+                    b.Property<string>("State")
+                        .HasMaxLength(100)
+                        .HasColumnType("varchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("Manufacturers");
                 });
 
             modelBuilder.Entity("FlightCrewStudio.Data.PreviousExperience", b =>
@@ -869,9 +926,9 @@ namespace FlightCrewStudio.Data.Migrations
 
             modelBuilder.Entity("FlightCrewStudio.Data.Aircraft", b =>
                 {
-                    b.HasOne("FlightCrewStudio.Data.AircraftType", "AircraftType")
+                    b.HasOne("FlightCrewStudio.Data.IcaoAircraftType", "IcaoAircraftType")
                         .WithMany()
-                        .HasForeignKey("AircraftTypeId")
+                        .HasForeignKey("IcaoAircraftTypeId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("FlightCrewStudio.Data.ApplicationUser", "User")
@@ -880,18 +937,7 @@ namespace FlightCrewStudio.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("AircraftType");
-
-                    b.Navigation("User");
-                });
-
-            modelBuilder.Entity("FlightCrewStudio.Data.AircraftType", b =>
-                {
-                    b.HasOne("FlightCrewStudio.Data.ApplicationUser", "User")
-                        .WithMany()
-                        .HasForeignKey("UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                    b.Navigation("IcaoAircraftType");
 
                     b.Navigation("User");
                 });
@@ -1014,6 +1060,16 @@ namespace FlightCrewStudio.Data.Migrations
                     b.Navigation("User");
                 });
 
+            modelBuilder.Entity("FlightCrewStudio.Data.IcaoAircraftType", b =>
+                {
+                    b.HasOne("FlightCrewStudio.Data.Manufacturer", "Manufacturer")
+                        .WithMany("AircraftTypes")
+                        .HasForeignKey("ManufacturerId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Manufacturer");
+                });
+
             modelBuilder.Entity("FlightCrewStudio.Data.PreviousExperience", b =>
                 {
                     b.HasOne("FlightCrewStudio.Data.ApplicationUser", "User")
@@ -1110,6 +1166,11 @@ namespace FlightCrewStudio.Data.Migrations
             modelBuilder.Entity("FlightCrewStudio.Data.Flight", b =>
                 {
                     b.Navigation("Crew");
+                });
+
+            modelBuilder.Entity("FlightCrewStudio.Data.Manufacturer", b =>
+                {
+                    b.Navigation("AircraftTypes");
                 });
 #pragma warning restore 612, 618
         }

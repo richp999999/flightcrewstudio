@@ -12,11 +12,12 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<CrewMember> CrewMembers => Set<CrewMember>();
     public DbSet<CrewRole> CrewRoles => Set<CrewRole>();
     public DbSet<Aircraft> Aircraft => Set<Aircraft>();
-    public DbSet<AircraftType> AircraftTypes => Set<AircraftType>();
     public DbSet<Airport> Airports => Set<Airport>();
     public DbSet<Country> Countries => Set<Country>();
     public DbSet<Region> Regions => Set<Region>();
     public DbSet<PreviousExperience> PreviousExperience => Set<PreviousExperience>();
+    public DbSet<Manufacturer> Manufacturers => Set<Manufacturer>();
+    public DbSet<IcaoAircraftType> IcaoAircraftTypes => Set<IcaoAircraftType>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -31,6 +32,14 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
 
         builder.Entity<PreviousExperience>(e =>
             e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade));
+
+        // An ICAO aircraft type can't be deleted while aircraft are linked to it.
+        builder.Entity<Aircraft>(e =>
+            e.HasOne(x => x.IcaoAircraftType).WithMany().HasForeignKey(x => x.IcaoAircraftTypeId).OnDelete(DeleteBehavior.Restrict));
+
+        // A manufacturer can't be deleted while aircraft types are linked to it.
+        builder.Entity<IcaoAircraftType>(e =>
+            e.HasOne(x => x.Manufacturer).WithMany(m => m.AircraftTypes).HasForeignKey(x => x.ManufacturerId).OnDelete(DeleteBehavior.Restrict));
 
         builder.Entity<SyncState>(e =>
         {
@@ -59,13 +68,8 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             e.HasOne(x => x.DepartureAirport).WithMany().HasForeignKey(x => x.DepartureAirportId).OnDelete(DeleteBehavior.Restrict);
             e.HasOne(x => x.ArrivalAirport).WithMany().HasForeignKey(x => x.ArrivalAirportId).OnDelete(DeleteBehavior.Restrict);
         });
-        builder.Entity<AircraftType>(e =>
-            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade));
         builder.Entity<Aircraft>(e =>
-        {
-            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
-            e.HasOne(x => x.AircraftType).WithMany().HasForeignKey(x => x.AircraftTypeId).OnDelete(DeleteBehavior.Restrict);
-        });
+            e.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade));
         builder.Entity<Flight>(e =>
             e.HasOne(x => x.Aircraft).WithMany().HasForeignKey(x => x.AircraftId).OnDelete(DeleteBehavior.Restrict));
         builder.Entity<Flight>(e =>

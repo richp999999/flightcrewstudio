@@ -1,4 +1,4 @@
-@page "/settings"
+@page "/settings/globalog"
 @attribute [Authorize]
 @rendermode InteractiveServer
 
@@ -8,7 +8,6 @@
 @using FlightCrewStudio.Components.Shared
 @using FlightCrewStudio.Services
 @using FlightCrewStudio.Services.GlobaLog
-@using FlightCrewStudio.Services.Sync
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject ICredentialProtector Protector
@@ -72,22 +71,6 @@ else
                 </div>
             }
 
-            <div class="mb-3">
-                <label for="me" class="form-label">My crew member</label>
-                <select id="me" class="form-select" @bind="_myCrewId" disabled="@(_crewChoices.Count == 0)">
-                    <option value="">@(_crewChoices.Count == 0 ? "Run a sync first to load crew" : "(not set)")</option>
-                    @foreach (var c in _crewChoices)
-                    {
-                        <option value="@c.Id">@c.Name — @c.Flights flights@(c.Id == _suggestedId && _savedMyCrewId is null ? " (suggested)" : "")</option>
-                    }
-                </select>
-                <div class="form-text">
-                    Which person in GlobaLog's crew lists is you. Your role on each flight (Captain,
-                    First officer, …) is taken from where you appear in that flight's crew. If not set,
-                    the next sync picks the crew member whose name matches your GlobaLog logbook.
-                </div>
-            </div>
-
             <div class="d-flex gap-2">
                 <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">Save</button>
                 <button class="btn btn-outline-secondary" @onclick="TestAsync" disabled="@_busy">Test connection</button>
@@ -119,12 +102,6 @@ else
     private string? _status;
     private bool _statusOk;
 
-    private sealed record CrewChoice(int Id, string Name, int Flights);
-    private List<CrewChoice> _crewChoices = new();
-    private string _myCrewId = "";          // bound to the <select>; "" = not set
-    private int? _savedMyCrewId;
-    private int? _suggestedId;
-
     protected override async Task OnInitializedAsync()
     {
         _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier);
@@ -136,25 +113,7 @@ else
             _username = Protector.Unprotect(cred.UsernameCipher);
             _hasPassword = !string.IsNullOrEmpty(cred.PasswordCipher);
             _hasToken = !string.IsNullOrEmpty(cred.ApiTokenCipher);
-            _savedMyCrewId = cred.MyCrewMemberId;
         }
-
-        // Crew choices, most-flown first. The person on (nearly) every flight is almost certainly you.
-        var counts = await db.FlightCrew.AsNoTracking()
-            .Where(fc => fc.CrewMember!.UserId == _userId)
-            .GroupBy(fc => fc.CrewMemberId)
-            .Select(g => new { Id = g.Key, Count = g.Count() })
-            .ToDictionaryAsync(x => x.Id, x => x.Count);
-        var members = await db.CrewMembers.AsNoTracking().Where(c => c.UserId == _userId).ToListAsync();
-        _crewChoices = members
-            .Select(m => new CrewChoice(m.Id, m.DisplayName, counts.GetValueOrDefault(m.Id)))
-            .OrderByDescending(c => c.Flights).ThenBy(c => c.Name)
-            .ToList();
-        var flightCount = await db.Flights.CountAsync(f => f.UserId == _userId);
-        var top = _crewChoices.FirstOrDefault();
-        _suggestedId = top is not null && flightCount > 0 && top.Flights >= flightCount * 0.9 ? top.Id : null;
-
-        _myCrewId = (_savedMyCrewId ?? _suggestedId)?.ToString() ?? "";
         _loaded = true;
     }
 
@@ -190,24 +149,14 @@ else
                     cred.ApiTokenCipher = Protector.Protect(_apiToken);
             }
 
-            int? newMe = int.TryParse(_myCrewId, out var id) && _crewChoices.Any(c => c.Id == id) ? id : null;
-            var meChanged = cred.MyCrewMemberId != newMe;
-            cred.MyCrewMemberId = newMe;
-
             cred.UpdatedAt = DateTime.UtcNow;
             await db.SaveChangesAsync();
-
-            // Fill "my role" on flights already stored, so no re-sync is needed.
-            var rolesUpdated = 0;
-            if (meChanged && newMe is { } me)
-                rolesUpdated = await MyCrewRole.ApplyToExistingFlightsAsync(db, _userId!, me);
-            _savedMyCrewId = newMe;
 
             _password = null; _apiToken = null;
             _hasPassword = !string.IsNullOrEmpty(cred.PasswordCipher);
             _hasToken = !string.IsNullOrEmpty(cred.ApiTokenCipher);
             _statusOk = true;
-            _status = rolesUpdated > 0 ? $"Settings saved. Your role was updated on {rolesUpdated} flight(s)." : "Settings saved.";
+            _status = "Settings saved.";
         }
         catch (Exception ex)
         {

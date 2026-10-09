@@ -21,9 +21,12 @@ public class Aircraft
     [Required, MaxLength(20)]
     public string Registration { get; set; } = default!;
 
-    /// <summary>The aircraft's type (which also holds the manufacturer).</summary>
-    public int? AircraftTypeId { get; set; }
-    public AircraftType? AircraftType { get; set; }
+    /// <summary>
+    /// The aircraft's ICAO type (Admin → Aircraft Types), found by code when a flight on it is
+    /// imported or synced, and editable on the aircraft's page. Null when the type isn't in the list.
+    /// </summary>
+    public int? IcaoAircraftTypeId { get; set; }
+    public IcaoAircraftType? IcaoAircraftType { get; set; }
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 

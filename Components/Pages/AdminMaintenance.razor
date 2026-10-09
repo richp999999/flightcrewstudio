@@ -18,7 +18,8 @@
                 on-block times along the great-circle route between its airports, and ticks “night landing”
                 when it was night at the destination at landing — the same calculation used when flights
                 are synced or edited. Run this after importing airport data, or to refresh older flights.
-                Flights whose airports have no position yet are left as they are.
+                Flights whose airports have no position yet, and flights imported from logbook.aero (which keep
+                that logbook's own figures), are left as they are.
             </p>
             <button class="btn btn-primary" @onclick="RunAsync" disabled="@_busy">@(_busy ? "Recalculating…" : "Recalculate all flights")</button>
             @if (_busy && _progress is not null) { <span class="small text-muted ms-2">@_progress</span> }
@@ -35,12 +36,14 @@
             @if (_error is not null) { <div class="alert alert-danger py-2 mt-3 mb-0">@_error</div> }
         </div>
     </div>
+
 </AdminShell>
 
 @code {
     private bool _busy;
     private string? _progress, _error;
     private DayNightRecalculator.Result? _result;
+
 
     private async Task RunAsync()
     {

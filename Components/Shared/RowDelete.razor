@@ -1,0 +1,36 @@
+@* A delete (bin) icon for a list row. Asks "Delete?" in place before calling OnDelete.
+   When the item is in use the icon is greyed out and explains why it can't be deleted. *@
+
+@if (_confirm)
+{
+    <span class="row-delete-confirm" @onclick:stopPropagation="true">
+        <span class="small me-1">Delete?</span>
+        <button class="btn btn-danger btn-sm py-0 px-2" @onclick="ConfirmAsync" disabled="@_busy">Yes</button>
+        <button class="btn btn-outline-secondary btn-sm py-0 px-2" @onclick="() => _confirm = false">No</button>
+    </span>
+}
+else
+{
+    <button type="button" class="btn-icon @(InUse ? "disabled" : "")" title="@(InUse ? InUseReason : "Delete")"
+            aria-label="Delete" @onclick="() => { if (!InUse) _confirm = true; }" @onclick:stopPropagation="true">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5m3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0z"/>
+            <path d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4zM2.5 3h11V2h-11z"/>
+        </svg>
+    </button>
+}
+
+@code {
+    [Parameter] public bool InUse { get; set; }
+    [Parameter] public string InUseReason { get; set; } = "In use, so it can't be deleted";
+    [Parameter] public EventCallback OnDelete { get; set; }
+
+    private bool _confirm, _busy;
+
+    private async Task ConfirmAsync()
+    {
+        _busy = true;
+        try { await OnDelete.InvokeAsync(); }
+        finally { _busy = false; _confirm = false; }
+    }
+}

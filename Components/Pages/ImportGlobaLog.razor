@@ -1,3 +1,5 @@
+@page "/import/globalog"
+@* /sync is the old address, kept so bookmarks still work. *@
 @page "/sync"
 @attribute [Authorize]
 @rendermode InteractiveServer
@@ -6,15 +8,20 @@
 @using System.Security.Claims
 @using Microsoft.EntityFrameworkCore
 @using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
 @using FlightCrewStudio.Services.Sync
 
 @inject IDbContextFactory<ApplicationDbContext> DbFactory
 @inject ISyncService SyncService
 @inject SyncProgressTracker Tracker
 
-<PageTitle>Sync</PageTitle>
+<PageTitle>Import from GlobaLog · FlightCrewStudio</PageTitle>
 
-<div class="page-head"><h1>Sync with GlobaLog</h1></div>
+<ImportShell>
+<div class="page-head">
+    <h1>GlobaLog</h1>
+    <div class="actions"><a href="/settings/globalog">GlobaLog login settings</a></div>
+</div>
 
 @if (!_loaded)
 {
@@ -26,7 +33,7 @@ else
         <div class="col-xl-6">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">Last synced</h5>
+                    <h5 class="card-title">Last imported</h5>
                     <p class="card-text">
                         Flights with an off-block time at or before this point are treated as already
                         fetched. Move it back to re-download earlier flights (they will be matched and
@@ -39,7 +46,7 @@ else
                     </div>
                     <div class="d-flex gap-2 align-items-center">
                         <button class="btn btn-outline-secondary" @onclick="SaveHighWaterAsync" disabled="@_progress.IsRunning">Save date</button>
-                        <button class="btn btn-outline-danger" @onclick="ClearHighWaterAsync" disabled="@_progress.IsRunning">Clear (full re-sync)</button>
+                        <button class="btn btn-outline-danger" @onclick="ClearHighWaterAsync" disabled="@_progress.IsRunning">Clear (full re-import)</button>
                     </div>
 
                     <hr />
@@ -52,7 +59,7 @@ else
         <div class="col-xl-6">
             <div class="card">
                 <div class="card-body">
-                    <h5 class="card-title">Run a sync</h5>
+                    <h5 class="card-title">Run an import</h5>
 
                     @if (_progress.IsRunning)
                     {
@@ -60,7 +67,7 @@ else
                     }
                     else
                     {
-                        <button class="btn btn-primary mb-3" @onclick="StartSync">Sync now</button>
+                        <button class="btn btn-primary mb-3" @onclick="StartSync">Import now</button>
                     }
 
                     <div class="mb-2">
@@ -94,6 +101,8 @@ else
         </div>
     </div>
 }
+
+</ImportShell>
 
 @code {
     [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;

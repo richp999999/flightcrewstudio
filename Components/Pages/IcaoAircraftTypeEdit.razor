@@ -1,0 +1,196 @@
+@page "/admin/aircraft-types/new"
+@page "/admin/aircraft-types/{Id:int}"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>@(IsNew ? "Add aircraft type" : _title) · Admin · FlightCrewStudio</PageTitle>
+
+@if (!_loaded) { <p><em>Loading…</em></p> }
+else if (_notFound) { <AdminShell Title="Aircraft type not found"><a href="/admin/aircraft-types">« Aircraft Types</a></AdminShell> }
+else
+{
+    <AdminShell Title="@(IsNew ? "Add aircraft type" : _title)">
+    <Actions><a href="/admin/aircraft-types">« Aircraft Types</a></Actions>
+    <ChildContent>
+    <div class="row g-4">
+        <div class="col-lg-7">
+            <div class="card"><div class="card-body">
+                <h5 class="card-title">Aircraft type</h5>
+                <div class="row g-2">
+                    <div class="col-sm-4">
+                        <label class="form-label small">ICAO designator</label>
+                        <input class="form-control text-uppercase" maxlength="4" placeholder="A21N" @bind="_designator" />
+                    </div>
+                    <div class="col-sm-8">
+                        <label class="form-label small">Manufacturer (code)</label>
+                        <input class="form-control text-uppercase" maxlength="100" placeholder="AIRBUS" list="maker-codes" @bind="_makerCode" />
+                        <datalist id="maker-codes">@foreach (var m in _makers) { <option value="@m.Code">@m.Name</option> }</datalist>
+                        @if (MakerName is { } mn) { <div class="form-text">@mn</div> }
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Model</label>
+                        <input class="form-control" maxlength="100" placeholder="A-321neo" @bind="_model" />
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small">Description</label>
+                        <input class="form-control text-uppercase" maxlength="3" placeholder="L2J" @bind="_description" />
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small">Kind</label>
+                        <select class="form-select" @bind="_kind">
+                            <option value="">—</option>
+                            @foreach (var k in IcaoAircraftType.AircraftKinds) { <option value="@k">@k</option> }
+                        </select>
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small">Engines</label>
+                        <select class="form-select" @bind="_engines">
+                            <option value="">—</option>
+                            @foreach (var n in new[] { "1", "2", "3", "4", "6", "8", "C" }) { <option value="@n">@(n == "C" ? "C (coupled)" : n)</option> }
+                        </select>
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small">Engine type</label>
+                        <select class="form-select" @bind="_engineType">
+                            <option value="">—</option>
+                            @foreach (var e in IcaoAircraftType.EngineTypes) { <option value="@e">@e</option> }
+                        </select>
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small">Wake category (WTC)</label>
+                        <select class="form-select" @bind="_wtc">
+                            <option value="">—</option>
+                            @foreach (var w in IcaoAircraftType.WakeCategories) { <option value="@w">@w</option> }
+                        </select>
+                    </div>
+                    <div class="col-sm-4">
+                        <label class="form-label small">RECAT-EU group (WTG)</label>
+                        <input class="form-control text-uppercase" maxlength="1" @bind="_wtg" />
+                    </div>
+                </div>
+            </div></div>
+        </div>
+        @if (!IsNew)
+        {
+            <div class="col-lg-5">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Usage</h5>
+                    <p class="mb-0">Aircraft linked to this type: <strong>@_used.ToString("N0")</strong></p>
+                </div></div>
+            </div>
+        }
+    </div>
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status)) { <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span> }
+        @if (!IsNew)
+        {
+            @if (_used == 0)
+            {
+                @if (_confirmDelete)
+                {
+                    <span class="me-1">Delete this aircraft type?</span>
+                    <button class="btn btn-danger" @onclick="DeleteAsync" disabled="@_busy">Delete</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Cancel</button>
+                }
+                else { <button class="btn btn-outline-danger me-auto" @onclick="() => _confirmDelete = true">Delete aircraft type</button> }
+            }
+            else { <span class="small-muted me-auto">Linked to aircraft, so it can't be deleted.</span> }
+        }
+        <a class="btn btn-outline-secondary" href="/admin/aircraft-types">Cancel</a>
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">@(IsNew ? "Add aircraft type" : "Save")</button>
+    </div>
+    </ChildContent>
+    </AdminShell>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsNew => Id is null;
+    private bool _loaded, _notFound, _busy, _statusOk, _confirmDelete;
+    private string? _status, _title, _designator, _makerCode, _model, _description, _kind, _engines, _engineType, _wtc, _wtg;
+    private int _used;
+    private List<Manufacturer> _makers = new();
+
+    private string? MakerName => Manufacturer.NormalizeCode(_makerCode) is { } c ? _makers.FirstOrDefault(m => m.Code == c)?.Name : null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _makers = await db.Manufacturers.AsNoTracking().OrderBy(m => m.Code).ToListAsync();
+        if (!IsNew)
+        {
+            var t = await db.IcaoAircraftTypes.AsNoTracking().Include(x => x.Manufacturer).FirstOrDefaultAsync(x => x.Id == Id);
+            if (t is null) { _notFound = true; _loaded = true; return; }
+            (_designator, _makerCode, _model, _description, _kind, _engines, _engineType, _wtc, _wtg) =
+                (t.Designator, t.Manufacturer?.Code, t.Model, t.Description, t.AircraftKind, t.EngineCount, t.EngineType, t.Wtc, t.Wtg);
+            _title = $"{t.Designator} — {t.Manufacturer?.Code} {t.Model}".Replace("  ", " ");
+            _used = await db.Aircraft.CountAsync(a => a.IcaoAircraftTypeId == Id);
+        }
+        _loaded = true;
+    }
+
+    private static string? T(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+    private void Fail(string m) { _statusOk = false; _status = m; }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            if (IcaoAircraftType.NormalizeDesignator(_designator) is not { Length: >= 2 } designator) { Fail("Enter the ICAO designator (2–4 characters, e.g. A21N)."); return; }
+            if (T(_model) is not { } model) { Fail("Enter the model."); return; }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.IcaoAircraftTypes.AnyAsync(t => t.Designator == designator && t.Id != (Id ?? 0))) { Fail($"{designator} already exists."); return; }
+
+            int? makerId = null;
+            if (Manufacturer.NormalizeCode(_makerCode) is { } code)
+            {
+                makerId = await db.Manufacturers.Where(m => m.Code == code).Select(m => (int?)m.Id).FirstOrDefaultAsync();
+                if (makerId is null) { Fail($"There's no manufacturer with the code {code} — add it under Manufacturers first."); return; }
+            }
+
+            IcaoAircraftType t;
+            if (IsNew) { t = new IcaoAircraftType(); db.IcaoAircraftTypes.Add(t); }
+            else t = await db.IcaoAircraftTypes.FirstAsync(x => x.Id == Id);
+
+            t.Designator = designator; t.ManufacturerId = makerId; t.Model = model;
+            t.Description = T(_description)?.ToUpperInvariant(); t.AircraftKind = T(_kind); t.EngineCount = T(_engines);
+            t.EngineType = T(_engineType); t.Wtc = T(_wtc); t.Wtg = T(_wtg)?.ToUpperInvariant();
+            await db.SaveChangesAsync();
+
+            if (IsNew) { Nav.NavigateTo($"/admin/aircraft-types/{t.Id}"); return; }
+            _title = $"{t.Designator} — {Manufacturer.NormalizeCode(_makerCode)} {t.Model}".Replace("  ", " ");
+            _designator = designator;
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex) { Fail($"Could not save: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var t = await db.IcaoAircraftTypes.FirstOrDefaultAsync(x => x.Id == Id);
+            if (t is null) { Nav.NavigateTo("/admin/aircraft-types"); return; }
+            if (await db.Aircraft.AnyAsync(a => a.IcaoAircraftTypeId == Id))
+            { Fail("This aircraft type is linked to aircraft and can't be deleted."); _confirmDelete = false; return; }
+            db.IcaoAircraftTypes.Remove(t);
+            await db.SaveChangesAsync();
+            Nav.NavigateTo("/admin/aircraft-types");
+        }
+        catch (Exception ex) { Fail($"Could not delete: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+}

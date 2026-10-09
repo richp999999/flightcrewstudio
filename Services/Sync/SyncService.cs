@@ -71,7 +71,7 @@ public sealed class SyncService(
         try
         {
             var credential = await db.GlobaLogCredentials.AsNoTracking().FirstOrDefaultAsync(c => c.UserId == userId, ct)
-                ?? throw new GlobaLogException("No GlobaLog credentials saved. Add them in Settings first.");
+                ?? throw new GlobaLogException("No GlobaLog credentials saved. Add them in Settings → GlobaLog first.");
 
             var state = await db.SyncStates.FirstOrDefaultAsync(s => s.UserId == userId, ct);
             if (state is null)
@@ -91,6 +91,7 @@ public sealed class SyncService(
             var roles = await CrewRoleLookup.LoadAsync(db, ct);
             var aircraft = await AircraftLookup.LoadAsync(db, userId, ct);
             var airports = await AirportLookup.LoadAsync(db, ct);
+            var icaoTypes = await IcaoTypeLookup.LoadAsync(db, ct);
             var crewErrors = 0;
             var skippedEdited = 0;
             var matchedImported = 0;
@@ -167,7 +168,7 @@ public sealed class SyncService(
                         logger.LogWarning(ex, "Could not fetch crew for GlobaLog flight {FlightId}", f.Id);
                     }
 
-                    var outcome = await UpsertAsync(db, userId, f, details, crewIndex, roles, aircraft, airports, roleSetThisRun, me, claimedThisRun, ct);
+                    var outcome = await UpsertAsync(db, userId, f, details, crewIndex, roles, aircraft, airports, icaoTypes, roleSetThisRun, me, claimedThisRun, ct);
                     progress.FlightsSeen++;
                     switch (outcome)
                     {
@@ -205,7 +206,7 @@ public sealed class SyncService(
             {
                 var tracked = await db.GlobaLogCredentials.FirstAsync(c => c.UserId == userId, ct);
                 tracked.MyCrewMemberId = me.Member.Id;
-                summary += $" Identified you as {me.Member.DisplayName} in the crew lists (change in Settings).";
+                summary += $" Identified you as {me.Member.DisplayName} in the crew lists (change in Settings → Me).";
             }
 
             state.LastSyncedThrough = newHighWater;
@@ -250,7 +251,7 @@ public sealed class SyncService(
     private static async Task<UpsertOutcome> UpsertAsync(
         ApplicationDbContext db, string userId, GlobaLogFlight f, GlobaLogFlightDetails? details,
         Dictionary<string, CrewMember> crewIndex, CrewRoleLookup roles, AircraftLookup aircraft, AirportLookup airports,
-        HashSet<CrewMember> roleSetThisRun, MyCrewContext me, HashSet<Flight> claimedThisRun, CancellationToken ct)
+        IcaoTypeLookup icaoTypes, HashSet<CrewMember> roleSetThisRun, MyCrewContext me, HashSet<Flight> claimedThisRun, CancellationToken ct)
     {
         var existing = await db.Flights
             .Include(x => x.Crew)
@@ -329,8 +330,14 @@ public sealed class SyncService(
         if (!keepLogbook)
             flight.PilotFlying = f.PilotFlying ?? flight.PilotFlying;
 
-        if (aircraft.Resolve(f.Aircraft?.Registration, f.Aircraft?.Icao, f.Aircraft?.Manufacturer) is { } ac)
+        if (aircraft.Resolve(f.Aircraft?.Registration) is { } ac)
+        {
             flight.Aircraft = ac;
+            // The aircraft's ICAO type, when it hasn't one yet: GlobaLog gives the manufacturer and
+            // model as ICAO names them ("AIRBUS" / "A-321neo"). A type already set is kept.
+            if (ac.IcaoAircraftTypeId is null && icaoTypes.Find(null, f.Aircraft?.Manufacturer, f.Aircraft?.Icao) is { } icaoTypeId)
+                ac.IcaoAircraftTypeId = icaoTypeId;
+        }
 
         flight.SourceCreatedAt = f.CreatedAt;
         flight.SourceUpdatedAt = f.UpdatedAt;

@@ -1,0 +1,102 @@
+@page "/admin/manufacturers"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Admin
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ReferenceDataImporter Importer
+@inject NavigationManager Nav
+
+<PageTitle>Manufacturers · Admin · FlightCrewStudio</PageTitle>
+
+<AdminShell Title="Manufacturers">
+<Actions>
+    <span class="text-muted">@_rows.Count.ToString("N0") manufacturers</span>
+    <a class="btn btn-primary btn-sm text-white" href="/admin/manufacturers/new">+ Add manufacturer</a>
+</Actions>
+<ChildContent>
+    <CsvImportPanel Title="Import manufacturers" OnImport="@(csv => Importer.ImportManufacturersAsync(csv))" OnImported="ReloadAsync"
+                    Help="Choose icao_manufacturers.csv (columns Code, Name, State). Manufacturers are matched on their code: codes already stored are skipped, never overwritten, and when a code appears more than once in the file only its first entry is used." />
+
+    <div class="row g-2 mb-3 align-items-center">
+        <div class="col-sm-6 col-lg-4">
+            <input class="form-control" placeholder="Search code, name or state" @bind="_search" @bind:event="oninput" />
+        </div>
+        <div class="col-auto small text-muted">@(Filtered.Count() > Limit ? $"Showing the first {Limit} — search to narrow." : "")</div>
+    </div>
+
+    @if (!_loaded) { <p><em>Loading…</em></p> }
+    else if (_rows.Count == 0) { <div class="alert alert-info">No manufacturers yet — import icao_manufacturers.csv above, or add one.</div> }
+    else
+    {
+        @if (_error is not null) { <div class="alert alert-danger py-2">@_error</div> }
+        <div class="table-responsive">
+            <table class="table table-hover align-middle table-log">
+                <thead><tr><th>Code</th><th>Name</th><th>State</th><th class="num">Aircraft types</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var r in Filtered.Take(Limit))
+                    {
+                        var id = r.Id;
+                        <tr class="clickable-row" @onclick="@(() => Nav.NavigateTo("/admin/manufacturers/" + id))" title="Edit manufacturer">
+                            <td class="fw-bold"><a class="text-reset" href="/admin/manufacturers/@id" @onclick:stopPropagation="true">@r.Code</a></td>
+                            <td>@r.Name</td>
+                            <td>@r.State</td>
+                            <td class="num">@if (r.Types > 0) { <a href="/admin/aircraft-types?manufacturer=@Uri.EscapeDataString(r.Code)" @onclick:stopPropagation="true">@r.Types</a> } else { <span class="text-muted">0</span> }</td>
+                            <td class="text-end" @onclick:stopPropagation="true">
+                                <RowDelete InUse="@(r.Types > 0)" InUseReason="Linked to aircraft types, so it can't be deleted" OnDelete="@(() => DeleteAsync(id))" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</ChildContent>
+</AdminShell>
+
+@code {
+    private const int Limit = 200;
+    private sealed record Row(int Id, string Code, string Name, string? State, int Types);
+    private bool _loaded;
+    private string _search = "";
+    private string? _error;
+    private List<Row> _rows = new();
+
+    private IEnumerable<Row> Filtered
+    {
+        get
+        {
+            var q = _search.Trim();
+            return q == "" ? _rows : _rows.Where(r => r.Code.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || r.Name.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.State?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+    }
+
+    protected override Task OnInitializedAsync() => ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var counts = await db.IcaoAircraftTypes.Where(t => t.ManufacturerId != null).GroupBy(t => t.ManufacturerId!.Value)
+            .Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C);
+        _rows = (await db.Manufacturers.AsNoTracking().OrderBy(m => m.Code).ToListAsync())
+            .Select(m => new Row(m.Id, m.Code, m.Name, m.State, counts.GetValueOrDefault(m.Id)))
+            .ToList();
+        _loaded = true;
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        _error = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        if (await db.IcaoAircraftTypes.AnyAsync(t => t.ManufacturerId == id)) { _error = "That manufacturer is linked to aircraft types, so it can't be deleted."; return; }
+        var m = await db.Manufacturers.FirstOrDefaultAsync(x => x.Id == id);
+        if (m is not null) { db.Manufacturers.Remove(m); await db.SaveChangesAsync(); }
+        _rows.RemoveAll(r => r.Id == id);
+    }
+}

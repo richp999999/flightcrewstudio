@@ -50,6 +50,26 @@ Use **Test connection** in Settings to see which works for your account. The CSR
 meta tag on GlobaLog's pages is **not** an API token — it's a short-lived, per-session value used
 only to submit the login form, and the app reads it automatically during web-session login.
 
+## Deploying with Docker Hub
+
+The image is built on your PC and pushed to Docker Hub; the server's `docker-compose.yml`
+pulls it from there (it doesn't build anything).
+
+1. **Build and push** (on your PC, after `docker login` once):
+   ```powershell
+   .\build-push.ps1                          # richp999999/flightcrewstudio:latest + a dated tag
+   .\build-push.ps1 -Platform linux/arm64    # if the server is ARM
+   ```
+2. **Deploy** (on the server, in a folder with `docker-compose.yml` and `.env`):
+   ```bash
+   docker compose pull && docker compose up -d
+   ```
+   Database migrations run automatically on startup. To pin a version, set
+   `FCS_IMAGE=richp999999/flightcrewstudio:20261009-1430` in `.env`.
+
+`.env` (passwords, keys), `Documents/` and `Claude outputs/` are excluded from the image by
+`.dockerignore`, so nothing private is pushed to Docker Hub.
+
 ## Quick start (Docker)
 
 ```bash

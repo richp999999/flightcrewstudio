@@ -24,7 +24,7 @@ else if (_all.Count == 0 && _crewFilter is null && _aircraftFilter is null)
 {
     <div class="alert alert-info">
         No flights stored yet. Add your GlobaLog credentials in
-        <a href="/settings">Settings</a>, then run a <a href="/sync">Sync</a>.
+        <a href="/settings/globalog">Settings</a>, then <a href="/import/globalog">import from GlobaLog</a>.
     </div>
 }
 else
@@ -82,9 +82,9 @@ else
             {
                 var flightDeck = f.Crew.Where(c => c.CrewRole?.IsFlightDeck == true).OrderBy(c => c.Position).ToList();
                 var others = f.Crew.Where(c => c.CrewRole?.IsFlightDeck != true).OrderBy(c => c.Position).ToList();
-                <div class="log-row clickable" @onclick="@(() => Nav.NavigateTo("/flights/" + f.Id))" title="Open flight">
+                <div class="log-row clickable" @onclick="@(() => Nav.NavigateTo(FlightUrl(f.Id)))" title="Open flight">
                     <div>
-                        <a href="/flights/@f.Id" class="text-reset" @onclick:stopPropagation="true">@(f.OffBlock?.ToString("dd/MM/yyyy") ?? "—")</a>
+                        <a href="@FlightUrl(f.Id)" class="text-reset" @onclick:stopPropagation="true">@(f.OffBlock?.ToString("dd/MM/yyyy") ?? "—")</a>
                         @if (f.EditedLocally) { <span class="badge badge-outline badge-tiny ms-1" title="Edited here; sync leaves it alone">edited</span> }
                         @if (f.Source is not null) { <span class="badge badge-soft badge-tiny ms-1" title="Imported from @f.Source">@f.Source</span> }
                         <br />
@@ -92,10 +92,11 @@ else
                     </div>
                     <div>
                         <a class="reg text-reset" href="/flights?aircraft=@f.AircraftId" @onclick:stopPropagation="true">@f.Aircraft?.DisplayRegistration</a>
-                        @if (f.Aircraft?.AircraftType is { } acType)
+                        @if (f.Aircraft?.IcaoAircraftType is { } icaoType)
                         {
-                            <span class="badge badge-soft ms-1" title="@acType.Manufacturer">@acType.Name</span>
+                            <span class="badge badge-soft ms-1" title="@icaoType.Manufacturer?.Code @icaoType.Model">@icaoType.Designator</span>
                         }
+
                     </div>
                     <div>
                         @foreach (var c in flightDeck)
@@ -126,7 +127,10 @@ else
                         <div class="airport"><span class="code">@(f.ArrivalAirport?.Icao ?? "???")</span><span>@f.OnBlock?.ToString("HH:mm")</span></div>
                         <div class="place">@f.ArrivalAirport?.Place @if (f.ArrivalAirport?.Iata is { } arrIata) { <span class="badge badge-soft badge-tiny ms-1">@arrIata</span> }</div>
                     </div>
-                    <div class="block">@Fmt.Hm(Fmt.BlockMinutes(f))</div>
+                    <div class="block">
+                        @if (CrewRole.Counts(f.MyCrewRole)) { @Fmt.Hm(Fmt.BlockMinutes(f)) }
+                        else { <span class="text-muted" title="@f.MyCrewRole?.Name — not counted as flight time">(@Fmt.Hm(Fmt.BlockMinutes(f)))</span> }
+                    </div>
                     <div class="tags">
                         @if (f.MyCrewRole is not null) { <span class="badge badge-role">@f.MyCrewRole.Name</span> }
                         @if (f.TotalInstrMinutes > 0) { <span class="badge badge-grey">IFR</span> }
@@ -159,6 +163,10 @@ else
                 @TotalsRow("Carried Forward", _broughtForward + _thisPage)
             </tbody>
         </table>
+        @if (_pageFlights.Any(f => !CrewRole.Counts(f.MyCrewRole)))
+        {
+            <div class="small-muted">Positioning, cabin-crew and supernumerary sectors, shown with their time in brackets, aren't counted as flight time.</div>
+        }
         @if (_opening.Block > 0)
         {
             <div class="small-muted">Brought Forward includes your <a href="/settings/previous-experience">previous experience</a> (@Fmt.HmZero(_opening.Block)).</div>
@@ -179,6 +187,12 @@ else
 
     /// <summary>Optional aircraft id: show only flights on this aircraft.</summary>
     [SupplyParameterFromQuery(Name = "aircraft")] private int? AircraftFilterId { get; set; }
+
+    /// <summary>Page to show (1-based, page 1 = latest flights). Without it the list opens at page 1.</summary>
+    [SupplyParameterFromQuery(Name = "page")] private int? PageParam { get; set; }
+
+    /// <summary>The filters <see cref="_all"/> was loaded for, so moving between pages doesn't reload it.</summary>
+    private (int? Crew, int? Aircraft)? _loadedFor;
     private Aircraft? _aircraftFilter;
 
     // Light projection of every flight (oldest first) for paging and running totals.
@@ -191,16 +205,18 @@ else
     /// <summary>Previous experience — part of the brought-forward totals, except when filtering by crew or aircraft.</summary>
     private Totals _opening;
 
-    private sealed record FlightSummary(int Id, DateTime? OffBlock, DateTime? OnBlock, int Day, int Night, int Instr, double? Radiation);
+    private sealed record FlightSummary(int Id, DateTime? OffBlock, DateTime? OnBlock, int Day, int Night, int Instr, double? Radiation, bool CountsAsFlightTime);
 
     private readonly record struct Totals(long Block, long Day, long Night, long Instr, int Flights, double Radiation)
     {
         public static Totals operator +(Totals a, Totals b) =>
             new(a.Block + b.Block, a.Day + b.Day, a.Night + b.Night, a.Instr + b.Instr, a.Flights + b.Flights, a.Radiation + b.Radiation);
 
-        public static Totals Of(IEnumerable<FlightSummary> fs) => fs.Aggregate(new Totals(), (t, f) => t + new Totals(
-            f.OffBlock is { } a && f.OnBlock is { } b && b > a ? (long)Math.Round((b - a).TotalMinutes) : 0,
-            f.Day, f.Night, f.Instr, 1, f.Radiation ?? 0));
+        /// <summary>Positioning (passive) sectors add only their radiation, not hours or a flight.</summary>
+        public static Totals Of(IEnumerable<FlightSummary> fs) => fs.Aggregate(new Totals(), (t, f) => t + (f.CountsAsFlightTime
+            ? new Totals(f.OffBlock is { } a && f.OnBlock is { } b && b > a ? (long)Math.Round((b - a).TotalMinutes) : 0,
+                f.Day, f.Night, f.Instr, 1, f.Radiation ?? 0)
+            : new Totals(0, 0, 0, 0, 0, f.Radiation ?? 0)));
     }
 
     private RenderFragment TotalsRow(string label, Totals t) => @<tr>
@@ -216,6 +232,14 @@ else
     protected override async Task OnParametersSetAsync()
     {
         _userId ??= (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier)!;
+
+        // Only the page changed (paging, or coming back from a flight): just show that page.
+        if (_loadedFor == (CrewId, AircraftFilterId))
+        {
+            _page = PageParam is { } pg ? Math.Clamp(pg, 1, _totalPages) : 1;
+            await LoadPageAsync();
+            return;
+        }
 
         await using var db = await DbFactory.CreateDbContextAsync();
         var query = db.Flights.AsNoTracking().Where(f => f.UserId == _userId);
@@ -237,29 +261,52 @@ else
 
         _all = await query
             .OrderBy(f => f.OffBlock).ThenBy(f => f.Id)
-            .Select(f => new FlightSummary(f.Id, f.OffBlock, f.OnBlock, f.TotalDayMinutes, f.TotalNightMinutes, f.TotalInstrMinutes, f.RadiationAmount))
+            .Select(f => new FlightSummary(f.Id, f.OffBlock, f.OnBlock, f.TotalDayMinutes, f.TotalNightMinutes, f.TotalInstrMinutes, f.RadiationAmount,
+                f.MyCrewRole == null || f.MyCrewRole.CountsAsFlightTime))
             .ToListAsync();
 
         _totalPages = Math.Max(1, (int)Math.Ceiling(_all.Count / (double)PageSize));
-        _page = _totalPages; // like a paper logbook: open at the latest page
+        // The page asked for in the address, else page 1 (the latest flights).
+        _page = PageParam is { } p ? Math.Clamp(p, 1, _totalPages) : 1;
         await LoadPageAsync();
+        _loadedFor = (CrewId, AircraftFilterId);
         _loaded = true;
     }
 
-    private async Task GoTo(int page)
+    /// <summary>Change page. The page goes in the address, so leaving and coming back returns to it.</summary>
+    private void GoTo(int page)
     {
         page = Math.Clamp(page, 1, _totalPages);
         if (page == _page) return;
-        _page = page;
-        await LoadPageAsync();
+        Nav.NavigateTo(ListUrl(page), replace: true);
     }
 
+    /// <summary>This list's address at the given page, keeping any crew/aircraft filter.</summary>
+    private string ListUrl(int page)
+    {
+        var q = new List<string>();
+        if (CrewId is { } c) q.Add($"crew={c}");
+        if (AircraftFilterId is { } a) q.Add($"aircraft={a}");
+        q.Add($"page={page}");
+        return "/flights?" + string.Join("&", q);
+    }
+
+    /// <summary>A flight's page, told where to go back to.</summary>
+    private string FlightUrl(int id) => $"/flights/{id}?return={Uri.EscapeDataString(ListUrl(_page))}";
+
+    /// <summary>
+    /// Load the flights for <see cref="_page"/>. The list is newest first (page 1 = the latest
+    /// flights, newest at the top), while <see cref="_all"/> stays oldest first so the running
+    /// totals work like a paper logbook: Brought Forward is everything older than this page.
+    /// </summary>
     private async Task LoadPageAsync()
     {
-        var skip = (_page - 1) * PageSize;
-        var ids = _all.Skip(skip).Take(PageSize).Select(f => f.Id).ToList();
-        _broughtForward = _opening + Totals.Of(_all.Take(skip));
-        _thisPage = Totals.Of(_all.Skip(skip).Take(PageSize));
+        var end = Math.Max(0, _all.Count - (_page - 1) * PageSize);   // exclusive, in oldest-first order
+        var start = Math.Max(0, end - PageSize);
+        var pageSlice = _all.Skip(start).Take(end - start).ToList();
+        var ids = pageSlice.Select(f => f.Id).Reverse().ToList();      // newest at the top
+        _broughtForward = _opening + Totals.Of(_all.Take(start));
+        _thisPage = Totals.Of(pageSlice);
 
         await using var db = await DbFactory.CreateDbContextAsync();
         _pageFlights = (await db.Flights.AsNoTracking()
@@ -267,7 +314,7 @@ else
                 .Include(f => f.Crew).ThenInclude(c => c.CrewMember)
                 .Include(f => f.Crew).ThenInclude(c => c.CrewRole)
                 .Include(f => f.MyCrewRole)
-                .Include(f => f.Aircraft).ThenInclude(a => a!.AircraftType)
+                .Include(f => f.Aircraft).ThenInclude(a => a!.IcaoAircraftType).ThenInclude(t => t!.Manufacturer)
                 .Include(f => f.DepartureAirport)
                 .Include(f => f.ArrivalAirport)
                 .AsSplitQuery()

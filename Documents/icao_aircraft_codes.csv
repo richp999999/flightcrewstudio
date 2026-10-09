@@ -1,0 +1,31 @@
+Manufacturer,Model,ICAO Code,Type,Engine Count,Engine Type,WTC
+AIRBUS,A-318,A318,LandPlane,2,Jet,M
+AIRBUS,A-319,A319,LandPlane,2,Jet,M
+AIRBUS,A-320,A320,LandPlane,2,Jet,M
+AIRBUS,A-321,A321,LandPlane,2,Jet,M
+AIRBUS,A-330-200,A332,LandPlane,2,Jet,H
+AIRBUS,A-330-300,A333,LandPlane,2,Jet,H
+AIRBUS,A-340-300,A343,LandPlane,4,Jet,H
+AIRBUS,A-350-900,A359,LandPlane,2,Jet,H
+AIRBUS,A-380-800,A388,LandPlane,4,Jet,J
+BOEING,737-700,B737,LandPlane,2,Jet,M
+BOEING,737-800,B738,LandPlane,2,Jet,M
+BOEING,737 MAX 8,B38M,LandPlane,2,Jet,M
+BOEING,747-400,B744,LandPlane,4,Jet,H
+BOEING,747-8,B748,LandPlane,4,Jet,H
+BOEING,757-200,B752,LandPlane,2,Jet,H
+BOEING,767-300,B763,LandPlane,2,Jet,H
+BOEING,777-200,B772,LandPlane,2,Jet,H
+BOEING,777-300ER,B77W,LandPlane,2,Jet,H
+BOEING,787-8 Dreamliner,B788,LandPlane,2,Jet,H
+BOEING,787-9 Dreamliner,B789,LandPlane,2,Jet,H
+BOMBARDIER,CRJ-700,CRJ7,LandPlane,2,Jet,M
+BOMBARDIER,CRJ-900,CRJ9,LandPlane,2,Jet,M
+EMBRAER,ERJ-145,E145,LandPlane,2,Jet,M
+EMBRAER,ERJ-175 (E175),E175,LandPlane,2,Jet,M
+EMBRAER,ERJ-190 (E190),E190,LandPlane,2,Jet,M
+ATR,ATR-42-300,AT43,LandPlane,2,Turboprop,M
+ATR,ATR-72-600,AT76,LandPlane,2,Turboprop,M
+CESSNA,172 Skyhawk,C172,LandPlane,1,Piston,L
+CESSNA,208 Caravan,C208,LandPlane,1,Turboprop,L
+PIPER,PA-28 Cherokee,P28A,LandPlane,1,Piston,L

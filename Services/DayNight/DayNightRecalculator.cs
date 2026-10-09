@@ -11,7 +11,8 @@ public sealed class DayNightRecalculator(IDbContextFactory<ApplicationDbContext>
     public async Task<Result> RecalculateAllAsync(Action<int, int>? progress = null, CancellationToken ct = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(ct);
-        var ids = await db.Flights.OrderBy(f => f.Id).Select(f => f.Id).ToListAsync(ct);
+        // Flights imported from another logbook keep that logbook's own figures (as sync does).
+        var ids = await db.Flights.Where(f => f.LoggedPicMinutes == null).OrderBy(f => f.Id).Select(f => f.Id).ToListAsync(ct);
         int updated = 0, unchanged = 0, cannot = 0;
         var missing = new SortedSet<string>();
 

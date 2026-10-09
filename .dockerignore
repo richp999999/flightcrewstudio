@@ -11,3 +11,10 @@ Dockerfile
 docker-compose*.yml
 README.md
 keys/
+
+# Never ship secrets or personal data in the image (it is pushed to Docker Hub)
+.env
+.env.*
+Documents/
+Claude outputs/
+build-push.*

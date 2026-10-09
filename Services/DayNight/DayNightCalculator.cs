@@ -25,7 +25,8 @@ public readonly record struct DayNightResult(int DayMinutes, int NightMinutes)
 /// (at off-block time) to the destination (at on-block time) at a constant rate. The route is
 /// split into 10-minute intervals plus a final shorter interval for any remainder. At each
 /// interval boundary the aircraft's position is found on the great circle and the sun's
-/// elevation is computed for that place and moment: below the horizon (sunset→sunrise) is night,
+/// elevation is computed for that place and moment: below −6° (between the end of evening civil
+/// twilight and the start of morning civil twilight — the EASA definition of night) is night,
 /// otherwise day. When an interval starts and ends in the same state, the whole interval counts
 /// as that state; when it changes (sunrise or sunset is crossed inside the interval) the exact
 /// moment of the change is found by bisection, so the result is accurate to the minute rather
@@ -36,12 +37,18 @@ public readonly record struct DayNightResult(int DayMinutes, int NightMinutes)
 /// </summary>
 public static class DayNightCalculator
 {
+    /// <summary>
+    /// The definition used throughout the app: civil twilight, as in EASA Part-FCL ("night" is the
+    /// period between the end of evening civil twilight and the beginning of morning civil twilight).
+    /// </summary>
+    public const NightDefinition Default = NightDefinition.CivilTwilight;
+
     public static readonly TimeSpan Interval = TimeSpan.FromMinutes(10);
 
     /// <summary>Calculate day/night minutes for a flight. Returns null if the times are unusable.</summary>
     public static DayNightResult? Calculate(DateTime offBlockUtc, DateTime onBlockUtc,
         double depLat, double depLon, double arrLat, double arrLon,
-        NightDefinition definition = NightDefinition.SunsetToSunrise)
+        NightDefinition definition = Default)
     {
         if (onBlockUtc <= offBlockUtc) return null;
         var total = onBlockUtc - offBlockUtc;
@@ -94,7 +101,7 @@ public static class DayNightCalculator
     }
 
     /// <summary>Is it night at this place and time?</summary>
-    public static bool IsNight(DateTime utc, double lat, double lon, NightDefinition definition = NightDefinition.SunsetToSunrise) =>
+    public static bool IsNight(DateTime utc, double lat, double lon, NightDefinition definition = Default) =>
         SolarPosition.ElevationDegrees(utc, lat, lon) < (definition == NightDefinition.CivilTwilight ? -6.0 : -0.833);
 }
 

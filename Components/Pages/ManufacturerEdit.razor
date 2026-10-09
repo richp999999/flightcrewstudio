@@ -1,0 +1,146 @@
+@page "/admin/manufacturers/new"
+@page "/admin/manufacturers/{Id:int}"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject NavigationManager Nav
+
+<PageTitle>@(IsNew ? "Add manufacturer" : _title) · Admin · FlightCrewStudio</PageTitle>
+
+@if (!_loaded) { <p><em>Loading…</em></p> }
+else if (_notFound) { <AdminShell Title="Manufacturer not found"><a href="/admin/manufacturers">« Manufacturers</a></AdminShell> }
+else
+{
+    <AdminShell Title="@(IsNew ? "Add manufacturer" : _title)">
+    <Actions><a href="/admin/manufacturers">« Manufacturers</a></Actions>
+    <ChildContent>
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="card"><div class="card-body">
+                <h5 class="card-title">Manufacturer</h5>
+                <div class="row g-2">
+                    <div class="col-12">
+                        <label class="form-label small">Code</label>
+                        <input class="form-control text-uppercase" maxlength="100" placeholder="AIRBUS" @bind="_code" />
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">Name</label>
+                        <input class="form-control" maxlength="200" placeholder="Airbus SAS (France/Germany/UK/Spain)" @bind="_name" />
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label small">State</label>
+                        <input class="form-control" maxlength="100" placeholder="France" @bind="_state" />
+                    </div>
+                </div>
+            </div></div>
+        </div>
+        @if (!IsNew)
+        {
+            <div class="col-lg-6">
+                <div class="card"><div class="card-body">
+                    <h5 class="card-title">Aircraft types</h5>
+                    @if (_types.Count == 0) { <p class="text-muted mb-0">None.</p> }
+                    else
+                    {
+                        <div class="d-flex flex-wrap gap-2">
+                            @foreach (var t in _types.Take(100)) { <a class="badge badge-soft fs-6" href="/admin/aircraft-types/@t.Id" title="@t.Model">@t.Designator</a> }
+                            @if (_types.Count > 100) { <a href="/admin/aircraft-types?manufacturer=@Uri.EscapeDataString(_code ?? "")">all @_types.Count »</a> }
+                        </div>
+                    }
+                </div></div>
+            </div>
+        }
+    </div>
+
+    <div class="save-bar">
+        @if (!string.IsNullOrEmpty(_status)) { <span class="@(_statusOk ? "text-success" : "text-danger") me-auto">@_status</span> }
+        @if (!IsNew)
+        {
+            @if (_types.Count == 0)
+            {
+                @if (_confirmDelete)
+                {
+                    <span class="me-1">Delete this manufacturer?</span>
+                    <button class="btn btn-danger" @onclick="DeleteAsync" disabled="@_busy">Delete</button>
+                    <button class="btn btn-outline-secondary" @onclick="() => _confirmDelete = false">Cancel</button>
+                }
+                else { <button class="btn btn-outline-danger me-auto" @onclick="() => _confirmDelete = true">Delete manufacturer</button> }
+            }
+            else { <span class="small-muted me-auto">Linked to @_types.Count aircraft type(s), so it can't be deleted.</span> }
+        }
+        <a class="btn btn-outline-secondary" href="/admin/manufacturers">Cancel</a>
+        <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">@(IsNew ? "Add manufacturer" : "Save")</button>
+    </div>
+    </ChildContent>
+    </AdminShell>
+}
+
+@code {
+    [Parameter] public int? Id { get; set; }
+    private bool IsNew => Id is null;
+    private bool _loaded, _notFound, _busy, _statusOk, _confirmDelete;
+    private string? _status, _title, _code, _name, _state;
+    private List<IcaoAircraftType> _types = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!IsNew)
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var m = await db.Manufacturers.AsNoTracking().FirstOrDefaultAsync(x => x.Id == Id);
+            if (m is null) { _notFound = true; _loaded = true; return; }
+            (_code, _name, _state, _title) = (m.Code, m.Name, m.State, m.Code);
+            _types = await db.IcaoAircraftTypes.AsNoTracking().Where(t => t.ManufacturerId == Id).OrderBy(t => t.Designator).ToListAsync();
+        }
+        _loaded = true;
+    }
+
+    private static string? T(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+    private void Fail(string m) { _statusOk = false; _status = m; }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            if (Manufacturer.NormalizeCode(_code) is not { } code) { Fail("Enter a code (e.g. AIRBUS)."); return; }
+            if (T(_name) is not { } name) { Fail("Enter a name."); return; }
+
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.Manufacturers.AnyAsync(m => m.Code == code && m.Id != (Id ?? 0))) { Fail($"{code} already exists."); return; }
+
+            Manufacturer m;
+            if (IsNew) { m = new Manufacturer(); db.Manufacturers.Add(m); }
+            else m = await db.Manufacturers.FirstAsync(x => x.Id == Id);
+            m.Code = code; m.Name = name; m.State = T(_state);
+            await db.SaveChangesAsync();
+
+            if (IsNew) { Nav.NavigateTo($"/admin/manufacturers/{m.Id}"); return; }
+            _title = m.Code; _code = code;
+            _statusOk = true; _status = "Saved.";
+        }
+        catch (Exception ex) { Fail($"Could not save: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+
+    private async Task DeleteAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            if (await db.IcaoAircraftTypes.AnyAsync(t => t.ManufacturerId == Id))
+            { Fail("This manufacturer is linked to aircraft types and can't be deleted."); _confirmDelete = false; return; }
+            var m = await db.Manufacturers.FirstOrDefaultAsync(x => x.Id == Id);
+            if (m is not null) { db.Manufacturers.Remove(m); await db.SaveChangesAsync(); }
+            Nav.NavigateTo("/admin/manufacturers");
+        }
+        catch (Exception ex) { Fail($"Could not delete: {ex.Message}"); }
+        finally { _busy = false; }
+    }
+}

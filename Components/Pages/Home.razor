@@ -31,7 +31,7 @@
         else if (_flights.Count == 0)
         {
             <div class="alert alert-info">
-                No flights yet. Add your GlobaLog login in <a href="/settings">Settings</a>, then run a <a href="/sync">Sync</a>.
+                No flights yet. Add your GlobaLog login in <a href="/settings/globalog">Settings</a>, then <a href="/import/globalog">import from GlobaLog</a>.
             </div>
         }
         else
@@ -45,10 +45,6 @@
                 <div class="stat"><div class="value">@_all.Flights</div><div class="label">Flights</div></div>
                 <div class="stat"><div class="value">@_all.Radiation.ToString("0")</div><div class="label nocase">µSv</div></div>
             </div>
-            @if (_hasOpening)
-            {
-                <div class="small-muted mt-n2 mb-3">Totals include your <a href="/settings/previous-experience">previous experience</a>.</div>
-            }
 
             <div class="row g-5">
                 <div class="col-lg-6">
@@ -122,7 +118,6 @@
     private List<TopCrew> _topCrew = new();
 
     private readonly record struct Totals(long Block, long Captain, long CoPilot, long Night, long Instr, int Flights, double Radiation);
-    private bool _hasOpening;
     private sealed record Period(string Label, Totals Totals, int? LimitHours);
     private sealed record TopCrew(int Id, string Name, string Initials, string? Role, int Count);
 
@@ -134,6 +129,7 @@
 
         await using var db = await DbFactory.CreateDbContextAsync();
         _flights = await db.Flights.AsNoTracking()
+            .Include(f => f.MyCrewRole)
             .Include(f => f.Aircraft)
             .Include(f => f.DepartureAirport)
             .Include(f => f.ArrivalAirport)
@@ -154,7 +150,6 @@
             Night = flown.Night + pe.NightMinutes,
             Instr = flown.Instr + pe.IfrMinutes,
         };
-        _hasOpening = pe.TotalMinutes > 0;
         // Rolling/calendar windows with the usual UK/EASA flight-time limits where they apply.
         _periods =
         [
@@ -193,8 +188,14 @@
         _loaded = true;
     }
 
+    /// <summary>
+    /// Hours and flight counts leave out positioning (passive) sectors, as the logbook does;
+    /// radiation counts every flight you were on.
+    /// </summary>
     private static Totals Sum(IEnumerable<Flight> fs) => fs.Aggregate(new Totals(), (t, f) =>
     {
+        if (!CrewRole.Counts(f.MyCrewRole))
+            return t with { Radiation = t.Radiation + (f.RadiationAmount ?? 0) };
         var block = Fmt.BlockMinutes(f);
         return new Totals(
             t.Block + block,

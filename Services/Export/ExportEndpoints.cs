@@ -12,8 +12,6 @@ public sealed class ExportForm
     public string? From { get; set; }
     public string? To { get; set; }
     public bool IncludePassive { get; set; }
-    public string? PilotName { get; set; }
-    public string? LicenceNumber { get; set; }
     public int RowsPerPage { get; set; } = 14;
     public bool CoverPages { get; set; }
 }
@@ -34,17 +32,8 @@ public static class ExportEndpoints
         {
             var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var user = await db.Users.FirstAsync(u => u.Id == userId, ct);
-
-            // Remember the name and licence number for next time.
-            var name = Clean(form.PilotName, 100) ?? user.LogbookName ?? user.DisplayName ?? user.UserName ?? "";
-            var licence = Clean(form.LicenceNumber, 50);
-            if (user.LogbookName != name || user.LicenceNumber != licence)
-            {
-                user.LogbookName = name;
-                user.LicenceNumber = licence;
-                await db.SaveChangesAsync(ct);
-            }
+            // Name and licence number as set in Settings → Me.
+            var (name, licence) = await PilotIdentity.GetAsync(db, userId, ct);
 
             var filter = Filter(form);
             var (entries, broughtForward) = await LogbookEntries.LoadAsync(db, userId, name, filter, ct);
@@ -58,9 +47,9 @@ public static class ExportEndpoints
         {
             var userId = principal.FindFirstValue(ClaimTypes.NameIdentifier)!;
             await using var db = await dbFactory.CreateDbContextAsync(ct);
-            var user = await db.Users.AsNoTracking().FirstAsync(u => u.Id == userId, ct);
+            var (name, _) = await PilotIdentity.GetAsync(db, userId, ct);
             var filter = Filter(form);
-            var (entries, _) = await LogbookEntries.LoadAsync(db, userId, user.LogbookName ?? user.DisplayName, filter, ct);
+            var (entries, _) = await LogbookEntries.LoadAsync(db, userId, name, filter, ct);
             return Results.File(LogbookCsvExporter.Write(entries), "text/csv", $"logbook{FileSuffix(filter)}.csv");
         });
 
@@ -76,6 +65,4 @@ public static class ExportEndpoints
         f.From is null && f.To is null ? $"-{DateTime.UtcNow:yyyy-MM-dd}"
             : $"-{f.From?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "start"}-to-{f.To?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "now"}";
 
-    private static string? Clean(string? s, int max) =>
-        string.IsNullOrWhiteSpace(s) ? null : s.Trim() is var t && t.Length > max ? t[..max] : s.Trim();
 }

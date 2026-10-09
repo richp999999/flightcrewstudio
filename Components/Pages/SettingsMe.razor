@@ -1,0 +1,156 @@
+@page "/settings"
+@attribute [Authorize]
+@rendermode InteractiveServer
+
+@using System.Security.Claims
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Sync
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+
+<PageTitle>Me · Settings · FlightCrewStudio</PageTitle>
+
+<SettingsShell>
+<div class="page-head"><h1>Me</h1></div>
+
+@if (!_loaded)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <div class="row">
+        <div class="col-xl-7">
+            <div class="mb-3">
+                <label for="me" class="form-label">My crew member</label>
+                <select id="me" class="form-select" @bind="_myCrewId" disabled="@(_crewChoices.Count == 0)">
+                    <option value="">@(_crewChoices.Count == 0 ? "Import some flights first to load crew" : "(not set)")</option>
+                    @foreach (var c in _crewChoices)
+                    {
+                        <option value="@c.Id">@c.Name — @c.Flights flights@(c.Id == _suggestedId && _savedMyCrewId is null ? " (suggested)" : "")</option>
+                    }
+                </select>
+                <div class="form-text">
+                    Which person in your list of crew members is you. This is how FlightCrewStudio recognises
+                    you in each flight's crew: your role on the flight (Captain, First officer, …) is taken from
+                    where you appear, and you're left out of “Most flown with”. If not set, the next GlobaLog
+                    import picks the crew member whose name matches your GlobaLog logbook.
+                </div>
+            </div>
+
+            <h5 class="mt-4">Logbook</h5>
+            <div class="row g-3 mb-3">
+                <div class="col-sm-7">
+                    <label for="logname" class="form-label">Name</label>
+                    <input id="logname" class="form-control" maxlength="100" @bind="_logbookName" placeholder="@_defaultName" />
+                </div>
+                <div class="col-sm-5">
+                    <label for="licence" class="form-label">Licence number</label>
+                    <input id="licence" class="form-control" maxlength="50" @bind="_licence" />
+                </div>
+                <div class="col-12 form-text mt-1">
+                    Printed on your logbook exports — the PDF title page, page headers and certification line —
+                    and used for you in the CSV's crew columns. Leave the name blank to use “@_defaultName”.
+                </div>
+            </div>
+
+            <button class="btn btn-primary" @onclick="SaveAsync" disabled="@_busy">Save</button>
+
+            @if (!string.IsNullOrEmpty(_status))
+            {
+                <div class="alert @(_statusOk ? "alert-success" : "alert-danger") mt-3" role="alert">@_status</div>
+            }
+        </div>
+    </div>
+}
+</SettingsShell>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loaded, _busy, _statusOk;
+    private string? _userId, _status;
+    private string? _logbookName, _licence, _defaultName;
+
+    private sealed record CrewChoice(int Id, string Name, int Flights);
+    private List<CrewChoice> _crewChoices = new();
+    private string _myCrewId = "";          // bound to the <select>; "" = not set
+    private int? _savedMyCrewId;
+    private int? _suggestedId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _userId = (await AuthState).User.FindFirstValue(ClaimTypes.NameIdentifier);
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // "Me" is stored with the user's GlobaLog settings record (created on save if there isn't one).
+        _savedMyCrewId = await db.GlobaLogCredentials.AsNoTracking()
+            .Where(c => c.UserId == _userId).Select(c => c.MyCrewMemberId).FirstOrDefaultAsync();
+
+        // Crew choices, most-flown first. The person on (nearly) every flight is almost certainly you.
+        var counts = await db.FlightCrew.AsNoTracking()
+            .Where(fc => fc.CrewMember!.UserId == _userId)
+            .GroupBy(fc => fc.CrewMemberId)
+            .Select(g => new { Id = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Id, x => x.Count);
+        var members = await db.CrewMembers.AsNoTracking().Where(c => c.UserId == _userId).ToListAsync();
+        _crewChoices = members
+            .Select(m => new CrewChoice(m.Id, m.DisplayName, counts.GetValueOrDefault(m.Id)))
+            .OrderByDescending(c => c.Flights).ThenBy(c => c.Name)
+            .ToList();
+        var flightCount = await db.Flights.CountAsync(f => f.UserId == _userId);
+        var top = _crewChoices.FirstOrDefault();
+        _suggestedId = top is not null && flightCount > 0 && top.Flights >= flightCount * 0.9 ? top.Id : null;
+
+        _myCrewId = (_savedMyCrewId ?? _suggestedId)?.ToString() ?? "";
+
+        var user = await db.Users.AsNoTracking().FirstAsync(u => u.Id == _userId);
+        _logbookName = user.LogbookName;
+        _licence = user.LicenceNumber;
+        _defaultName = await FlightCrewStudio.Services.PilotIdentity.DefaultNameAsync(db, user);
+        _loaded = true;
+    }
+
+    private async Task SaveAsync()
+    {
+        _busy = true; _status = null;
+        try
+        {
+            await using var db = await DbFactory.CreateDbContextAsync();
+            var cred = await db.GlobaLogCredentials.FirstOrDefaultAsync(c => c.UserId == _userId);
+            if (cred is null)
+            {
+                cred = new GlobaLogCredential { UserId = _userId! };
+                db.GlobaLogCredentials.Add(cred);
+            }
+
+            int? newMe = int.TryParse(_myCrewId, out var id) && _crewChoices.Any(c => c.Id == id) ? id : null;
+            var meChanged = cred.MyCrewMemberId != newMe;
+            cred.MyCrewMemberId = newMe;
+            cred.UpdatedAt = DateTime.UtcNow;
+
+            var user = await db.Users.FirstAsync(u => u.Id == _userId);
+            user.LogbookName = Trim(_logbookName, 100);
+            user.LicenceNumber = Trim(_licence, 50);
+            await db.SaveChangesAsync();
+            _logbookName = user.LogbookName; _licence = user.LicenceNumber;
+            if (user.LogbookName is null)
+                _defaultName = await FlightCrewStudio.Services.PilotIdentity.DefaultNameAsync(db, user);
+
+            // Fill "my role" on flights already stored, so no re-import is needed.
+            var rolesUpdated = 0;
+            if (meChanged && newMe is { } me)
+                rolesUpdated = await MyCrewRole.ApplyToExistingFlightsAsync(db, _userId!, me);
+            _savedMyCrewId = newMe;
+
+            _statusOk = true;
+            _status = rolesUpdated > 0 ? $"Saved. Your role was updated on {rolesUpdated} flight(s)." : "Saved.";
+        }
+        catch (Exception ex) { _statusOk = false; _status = $"Could not save: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private static string? Trim(string? s, int max) =>
+        string.IsNullOrWhiteSpace(s) ? null : s.Trim() is var t && t.Length > max ? t[..max] : s.Trim();
+}

@@ -1,0 +1,120 @@
+@page "/admin/aircraft-types"
+@attribute [Authorize(Policy = "Admin")]
+@rendermode InteractiveServer
+
+@using Microsoft.EntityFrameworkCore
+@using FlightCrewStudio.Data
+@using FlightCrewStudio.Components.Shared
+@using FlightCrewStudio.Services.Admin
+
+@inject IDbContextFactory<ApplicationDbContext> DbFactory
+@inject ReferenceDataImporter Importer
+@inject NavigationManager Nav
+
+<PageTitle>Aircraft Types · Admin · FlightCrewStudio</PageTitle>
+
+<AdminShell Title="Aircraft Types">
+<Actions>
+    <span class="text-muted">@_rows.Count.ToString("N0") aircraft types</span>
+    <a class="btn btn-primary btn-sm text-white" href="/admin/aircraft-types/new">+ Add aircraft type</a>
+</Actions>
+<ChildContent>
+    <CsvImportPanel Title="Import aircraft types" OnImport="@(csv => Importer.ImportAircraftTypesAsync(csv))" OnImported="ReloadAsync"
+                    Help="Choose icao_aircraft_types.csv. Types are matched on their ICAO designator (e.g. A21N): designators already stored are skipped, never overwritten, and when a designator appears more than once in the file only its first entry is used. Each type is linked to its manufacturer by code, so import manufacturers first." />
+
+    <div class="row g-2 mb-3 align-items-center">
+        <div class="col-sm-6 col-lg-4">
+            <input class="form-control" placeholder="Search designator, manufacturer or model" @bind="_search" @bind:event="oninput" />
+        </div>
+        @if (ManufacturerCode is not null)
+        {
+            <div class="col-auto">
+                <span class="btn btn-soft btn-sm">@ManufacturerCode</span>
+                <a class="btn btn-outline-secondary btn-sm" href="/admin/aircraft-types">All manufacturers</a>
+            </div>
+        }
+        <div class="col-auto small text-muted">@(Filtered.Count() > Limit ? $"Showing the first {Limit} — search to narrow." : "")</div>
+    </div>
+
+    @if (!_loaded) { <p><em>Loading…</em></p> }
+    else if (_rows.Count == 0) { <div class="alert alert-info">No aircraft types yet — import icao_aircraft_types.csv above, or add one.</div> }
+    else
+    {
+        @if (_error is not null) { <div class="alert alert-danger py-2">@_error</div> }
+        <div class="table-responsive">
+            <table class="table table-hover align-middle table-log">
+                <thead><tr><th>Designator</th><th>Manufacturer</th><th>Model</th><th>Description</th><th>Wake</th><th class="num">Aircraft</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var r in Filtered.Take(Limit))
+                    {
+                        var id = r.Id;
+                        <tr class="clickable-row" @onclick="@(() => Nav.NavigateTo("/admin/aircraft-types/" + id))" title="Edit aircraft type">
+                            <td class="fw-bold"><a class="text-reset" href="/admin/aircraft-types/@id" @onclick:stopPropagation="true">@r.Designator</a></td>
+                            <td>@if (r.MakerId is { } mid) { <a href="/admin/manufacturers/@mid" @onclick:stopPropagation="true">@r.MakerCode</a> } else { <span class="text-muted">—</span> }</td>
+                            <td>@r.Model</td>
+                            <td><span title="@r.Kind, @r.Engines engine(s), @r.EngineType">@r.Description</span></td>
+                            <td>@r.Wtc</td>
+                            <td class="num">@(r.Used > 0 ? r.Used.ToString("N0") : "")</td>
+                            <td class="text-end" @onclick:stopPropagation="true">
+                                <RowDelete InUse="@(r.Used > 0)" InUseReason="Linked to aircraft, so it can't be deleted" OnDelete="@(() => DeleteAsync(id))" />
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</ChildContent>
+</AdminShell>
+
+@code {
+    private const int Limit = 200;
+    /// <summary>Optional manufacturer code: show only that manufacturer's types.</summary>
+    [SupplyParameterFromQuery(Name = "manufacturer")] private string? ManufacturerCode { get; set; }
+
+    private sealed record Row(int Id, string Designator, int? MakerId, string? MakerCode, string Model, string? Description,
+        string? Kind, string? Engines, string? EngineType, string? Wtc, int Used);
+    private bool _loaded;
+    private string _search = "";
+    private string? _error;
+    private List<Row> _rows = new();
+
+    private IEnumerable<Row> Filtered
+    {
+        get
+        {
+            var rows = ManufacturerCode is null ? _rows : _rows.Where(r => string.Equals(r.MakerCode, ManufacturerCode, StringComparison.OrdinalIgnoreCase));
+            var q = _search.Trim();
+            return q == "" ? rows : rows.Where(r => r.Designator.Contains(q, StringComparison.OrdinalIgnoreCase)
+                || (r.MakerCode?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false)
+                || r.Model.Contains(q, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    protected override Task OnParametersSetAsync() => ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        await using var db = await DbFactory.CreateDbContextAsync();
+        // Aircraft (all users) linked to each type.
+        var used = await db.Aircraft.Where(a => a.IcaoAircraftTypeId != null).GroupBy(a => a.IcaoAircraftTypeId!.Value)
+            .Select(g => new { g.Key, C = g.Count() }).ToDictionaryAsync(x => x.Key, x => x.C);
+        _rows = (await db.IcaoAircraftTypes.AsNoTracking().Include(t => t.Manufacturer).OrderBy(t => t.Designator).ToListAsync())
+            .Select(t => new Row(t.Id, t.Designator, t.ManufacturerId, t.Manufacturer?.Code, t.Model, t.Description,
+                t.AircraftKind, t.EngineCount, t.EngineType, t.Wtc, used.GetValueOrDefault(t.Id)))
+            .ToList();
+        _loaded = true;
+    }
+
+    private async Task DeleteAsync(int id)
+    {
+        _error = null;
+        await using var db = await DbFactory.CreateDbContextAsync();
+        var t = await db.IcaoAircraftTypes.FirstOrDefaultAsync(x => x.Id == id);
+        if (t is null) { _rows.RemoveAll(r => r.Id == id); return; }
+        if (await db.Aircraft.AnyAsync(a => a.IcaoAircraftTypeId == id)) { _error = $"{t.Designator} is linked to aircraft, so it can't be deleted."; return; }
+        db.IcaoAircraftTypes.Remove(t);
+        await db.SaveChangesAsync();
+        _rows.RemoveAll(r => r.Id == id);
+    }
+}
